@@ -1,0 +1,23 @@
+# Node dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+
+# Build outputs
+dist/
+
+# Persistent WhatsApp authentication session files (DO NOT COMMIT CREDENTIALS)
+auth_info/
+!auth_info/.gitkeep
+*.session
+*.auth
+
+# Local environment secrets
+.env
+.env.local
+.env.*.local
+
+# Operating System
+.DS_Store
+Thumbs.db

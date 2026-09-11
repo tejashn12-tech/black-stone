@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Black Stone Fitness (BSF) | Mysuru's Premier Strength & Training Hub</title>
+    <script>
+      (function() {
+        var isExhausted = function(args) {
+          for (var i = 0; i < args.length; i++) {
+            var a = args[i];
+            var s = '';
+            if (typeof a === 'string') s = a;
+            else if (a && (a.message || a.stack)) s = (a.message || '') + ' ' + (a.stack || '');
+            else if (a && typeof a.toString === 'function') s = a.toString();
+            if (
+              s.indexOf('RESOURCE_EXHAUSTED') !== -1 ||
+              s.indexOf('resource-exhausted') !== -1 ||
+              s.indexOf('Quota limit exceeded') !== -1 ||
+              s.indexOf('Free daily write units') !== -1 ||
+              s.indexOf('free tier database') !== -1 ||
+              (s.indexOf('GrpcConnection') !== -1 && s.indexOf('stream') !== -1)
+            ) {
+              return true;
+            }
+          }
+          return false;
+        };
+        var origError = console.error;
+        console.error = function() {
+          if (isExhausted(arguments)) return;
+          origError.apply(console, arguments);
+        };
+        var origWarn = console.warn;
+        console.warn = function() {
+          if (isExhausted(arguments)) return;
+          origWarn.apply(console, arguments);
+        };
+        window.addEventListener('error', function(e) {
+          if (isExhausted([e.message, e.error])) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function(e) {
+          if (isExhausted([e.reason && e.reason.message, e.reason])) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }, true);
+      })();
+    </script>
+    <meta name="description" content="Black Stone Fitness (BSF) Mysuru - Premium strength training, CrossFit, HIIT, personal training, and modern gym facilities. Build your strongest self." />
+    <meta property="og:title" content="Black Stone Fitness (BSF) | Mysuru" />
+    <meta property="og:description" content="Build your strongest self at Mysuru's premier fitness destination. State-of-the-art equipment, certified trainers, and dynamic community." />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" content="#09090b" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body class="bg-zinc-950 text-zinc-100 antialiased selection:bg-orange-500 selection:text-black font-['Outfit',sans-serif]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

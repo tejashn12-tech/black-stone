@@ -1,0 +1,339 @@
+{
+  "entities": {
+    "Member": {
+      "title": "Member",
+      "description": "Gym member profile and membership details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "memberCode": { "type": "string", "maxLength": 50 },
+        "fullName": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 20 },
+        "whatsapp": { "type": "string", "maxLength": 20 },
+        "gender": { "type": "string", "enum": ["Male", "Female", "Other"] },
+        "dob": { "type": "string", "maxLength": 20 },
+        "photoUrl": { "type": "string", "maxLength": 500 },
+        "packageId": { "type": "string", "maxLength": 128 },
+        "packageName": { "type": "string", "maxLength": 100 },
+        "startDate": { "type": "string", "maxLength": 20 },
+        "expiryDate": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["active", "expiring_soon", "expired", "payment_due", "fully_paid"] },
+        "totalAmount": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "pendingAmount": { "type": "number" },
+        "assignedTrainerId": { "type": "string", "maxLength": 128 },
+        "assignedTrainerName": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "emergencyContact": { "type": "string", "maxLength": 50 },
+        "bloodGroup": { "type": "string", "maxLength": 10 },
+        "address": { "type": "string", "maxLength": 300 },
+        "heightCm": { "type": "number" },
+        "weightKg": { "type": "number" },
+        "bmi": { "type": "number" },
+        "joinedDate": { "type": "string", "maxLength": 30 },
+        "password": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["id", "memberCode", "fullName", "phone", "packageId", "packageName", "startDate", "expiryDate", "status", "totalAmount", "paidAmount", "pendingAmount"]
+    },
+    "MembershipPackage": {
+      "title": "MembershipPackage",
+      "description": "Gym membership subscription package",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "durationMonths": { "type": "number" },
+        "price": { "type": "number" },
+        "originalPrice": { "type": "number" },
+        "description": { "type": "string", "maxLength": 500 },
+        "features": { "type": "array" },
+        "popular": { "type": "boolean" },
+        "active": { "type": "boolean" },
+        "badge": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "name", "durationMonths", "price", "description", "active"]
+    },
+    "PaymentRecord": {
+      "title": "PaymentRecord",
+      "description": "Financial payment transaction and receipt record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "receiptNo": { "type": "string", "maxLength": 50 },
+        "memberId": { "type": "string", "maxLength": 128 },
+        "memberName": { "type": "string", "maxLength": 100 },
+        "memberPhone": { "type": "string", "maxLength": 20 },
+        "packageId": { "type": "string", "maxLength": 128 },
+        "packageName": { "type": "string", "maxLength": 100 },
+        "amountPaid": { "type": "number" },
+        "totalPackageAmount": { "type": "number" },
+        "pendingAmount": { "type": "number" },
+        "discount": { "type": "number" },
+        "paymentDate": { "type": "string", "maxLength": 30 },
+        "paymentMethod": { "type": "string", "enum": ["UPI", "Cash", "Card", "Bank Transfer", "Other"] },
+        "status": { "type": "string", "enum": ["PAID", "PARTIALLY PAID", "PAYMENT DUE"] },
+        "notes": { "type": "string", "maxLength": 500 },
+        "whatsappStatus": { "type": "string", "enum": ["Sent", "Delivered", "Read", "Failed", "Pending"] },
+        "whatsappSentAt": { "type": "string", "maxLength": 50 },
+        "transactionRef": { "type": "string", "maxLength": 100 },
+        "expiryDate": { "type": "string", "maxLength": 30 },
+        "receiptSent": { "type": "boolean" }
+      },
+      "required": ["id", "receiptNo", "memberId", "memberName", "amountPaid", "paymentDate", "paymentMethod", "status"]
+    },
+    "Trainer": {
+      "title": "Trainer",
+      "description": "Gym coach and certified personal trainer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "maxLength": 100 },
+        "specialization": { "type": "array" },
+        "experienceYears": { "type": "number" },
+        "certifications": { "type": "array" },
+        "bio": { "type": "string", "maxLength": 1000 },
+        "photoUrl": { "type": "string", "maxLength": 500 },
+        "rating": { "type": "number" },
+        "active": { "type": "boolean" },
+        "phone": { "type": "string", "maxLength": 20 },
+        "instagram": { "type": "string", "maxLength": 100 },
+        "assignedMemberCount": { "type": "number" }
+      },
+      "required": ["id", "name", "role", "phone", "active"]
+    },
+    "Enquiry": {
+      "title": "Enquiry",
+      "description": "Visitor or prospective member lead enquiry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "enquiryCode": { "type": "string", "maxLength": 50 },
+        "name": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 20 },
+        "whatsapp": { "type": "string", "maxLength": 20 },
+        "gender": { "type": "string", "enum": ["Male", "Female", "Other"] },
+        "age": { "type": "number" },
+        "address": { "type": "string", "maxLength": 300 },
+        "fitnessGoal": { "type": "string", "maxLength": 200 },
+        "referralSource": { "type": "string", "enum": ["Google", "Instagram", "Facebook", "Friend/Referral", "Walk-in", "Advertisement", "Other"] },
+        "pastExperience": { "type": "string", "maxLength": 500 },
+        "medicalConsultation": { "type": "string", "maxLength": 500 },
+        "injuries": { "type": "string", "maxLength": 500 },
+        "preferredPackageId": { "type": "string", "maxLength": 128 },
+        "preferredPackageName": { "type": "string", "maxLength": 100 },
+        "budget": { "type": "string", "maxLength": 100 },
+        "preferredTrainer": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["New Lead", "Contacted", "Follow-up Required", "Interested", "Not Interested", "Converted to Member"] },
+        "followUpDate": { "type": "string", "maxLength": 30 },
+        "followUpNotes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "convertedMemberId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "enquiryCode", "name", "phone", "status", "createdAt"]
+    },
+    "WhatsAppLog": {
+      "title": "WhatsAppLog",
+      "description": "WhatsApp dispatch notification audit log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "recipientName": { "type": "string", "maxLength": 100 },
+        "recipientPhone": { "type": "string", "maxLength": 20 },
+        "type": { "type": "string", "maxLength": 50 },
+        "templateName": { "type": "string", "maxLength": 100 },
+        "content": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["Sent", "Delivered", "Read", "Failed", "Pending"] },
+        "sentAt": { "type": "string", "maxLength": 50 },
+        "receiptNo": { "type": "string", "maxLength": 50 },
+        "memberId": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["id", "recipientName", "recipientPhone", "type", "content", "status", "sentAt"]
+    },
+    "GymSettings": {
+      "title": "GymSettings",
+      "description": "Gym branch configuration and automation preferences",
+      "type": "object",
+      "properties": {
+        "gymName": { "type": "string", "maxLength": 100 },
+        "shortLogo": { "type": "string", "maxLength": 20 },
+        "tagline": { "type": "string", "maxLength": 200 },
+        "address": { "type": "string", "maxLength": 300 },
+        "city": { "type": "string", "maxLength": 100 },
+        "state": { "type": "string", "maxLength": 100 },
+        "pincode": { "type": "string", "maxLength": 20 },
+        "phone": { "type": "string", "maxLength": 20 },
+        "whatsapp": { "type": "string", "maxLength": 20 },
+        "email": { "type": "string", "maxLength": 100 },
+        "openingHoursWeekdays": { "type": "string", "maxLength": 100 },
+        "openingHoursSunday": { "type": "string", "maxLength": 100 },
+        "upiId": { "type": "string", "maxLength": 100 },
+        "gstNumber": { "type": "string", "maxLength": 50 },
+        "receiptPrefix": { "type": "string", "maxLength": 20 },
+        "metaCloudApiKey": { "type": "string", "maxLength": 500 },
+        "metaPhoneNumberId": { "type": "string", "maxLength": 100 },
+        "metaBusinessAccountId": { "type": "string", "maxLength": 100 },
+        "isMetaApiActive": { "type": "boolean" },
+        "enable7DayReminders": { "type": "boolean" },
+        "enable3DayReminders": { "type": "boolean" },
+        "enable1DayReminders": { "type": "boolean" },
+        "enablePostExpiryReminders": { "type": "boolean" },
+        "enableBirthdayGreetings": { "type": "boolean" },
+        "reminder7DayTemplate": { "type": "string", "maxLength": 1000 },
+        "reminder3DayTemplate": { "type": "string", "maxLength": 1000 },
+        "reminder1DayTemplate": { "type": "string", "maxLength": 1000 },
+        "birthdayTemplate": { "type": "string", "maxLength": 1000 }
+      },
+      "required": ["gymName", "phone", "whatsapp", "receiptPrefix"]
+    },
+    "ConsentRecord": {
+      "title": "ConsentRecord",
+      "description": "DPDP 2023 granular consent log with timestamp and purposes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "principalName": { "type": "string", "maxLength": 100 },
+        "principalContact": { "type": "string", "maxLength": 100 },
+        "principalType": { "type": "string", "enum": ["member", "lead", "visitor"] },
+        "principalId": { "type": "string", "maxLength": 128 },
+        "purposes": { "type": "object" },
+        "consentVersion": { "type": "string", "maxLength": 50 },
+        "noticeVersion": { "type": "string", "maxLength": 50 },
+        "timestamp": { "type": "string", "maxLength": 50 },
+        "ipAddress": { "type": "string", "maxLength": 100 },
+        "userAgent": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["active", "withdrawn", "partially_withdrawn"] },
+        "withdrawalTimestamp": { "type": "string", "maxLength": 50 },
+        "withdrawalReason": { "type": "string", "maxLength": 500 }
+      },
+      "required": ["id", "principalName", "principalContact", "purposes", "consentVersion", "timestamp", "status"]
+    },
+    "DataSubjectRequest": {
+      "title": "DataSubjectRequest",
+      "description": "DPDP Data Principal statutory rights request (Access, Correction, Erasure, Nomination, Withdrawal)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "requestNumber": { "type": "string", "maxLength": 50 },
+        "principalName": { "type": "string", "maxLength": 100 },
+        "principalContact": { "type": "string", "maxLength": 100 },
+        "principalIdentifier": { "type": "string", "maxLength": 100 },
+        "requestType": { "type": "string", "enum": ["access_summary", "correction", "erasure", "withdraw_consent", "nomination"] },
+        "details": { "type": "string", "maxLength": 1000 },
+        "correctionsRequested": { "type": "string", "maxLength": 1000 },
+        "nomineeName": { "type": "string", "maxLength": 100 },
+        "nomineeContact": { "type": "string", "maxLength": 100 },
+        "nomineeRelationship": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["pending", "in_progress", "fulfilled", "rejected"] },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "acknowledgedAt": { "type": "string", "maxLength": 50 },
+        "fulfilledAt": { "type": "string", "maxLength": 50 },
+        "resolutionNotes": { "type": "string", "maxLength": 1000 },
+        "handledBy": { "type": "string", "maxLength": 100 },
+        "statutoryDeadline": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "requestNumber", "principalName", "principalContact", "requestType", "status", "createdAt", "statutoryDeadline"]
+    },
+    "WhatsAppMessage": {
+      "title": "WhatsAppMessage",
+      "description": "WhatsApp transactional and automation message log stored in gym subcollection",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "memberId": { "type": "string", "maxLength": 128 },
+        "memberName": { "type": "string", "maxLength": 100 },
+        "recipient": { "type": "string", "maxLength": 50 },
+        "messageType": { "type": "string", "enum": ["payment_receipt", "expiry_reminder", "birthday_wish", "festival_greeting", "custom"] },
+        "messageText": { "type": "string", "maxLength": 4000 },
+        "status": { "type": "string", "enum": ["queued", "sent", "delivered", "read", "failed"] },
+        "sentAt": { "type": "string", "maxLength": 50 },
+        "deliveredAt": { "type": "string", "maxLength": 50 },
+        "readAt": { "type": "string", "maxLength": 50 },
+        "errorMessage": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "receiptNumber": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["id", "recipient", "messageType", "status", "sentAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile and gym association",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 100 },
+        "gymId": { "type": "string", "maxLength": 128 },
+        "gyms": { "type": "array" },
+        "role": { "type": "string", "maxLength": 50 }
+      }
+    },
+    "AutomationSentRecord": {
+      "title": "AutomationSentRecord",
+      "description": "Deduplication tracking record for dispatched automated messages",
+      "type": "object",
+      "properties": {
+        "trackingKey": { "type": "string", "maxLength": 128 },
+        "type": { "type": "string", "enum": ["renewal_7d", "renewal_3d", "renewal_1d", "birthday", "festival"] },
+        "memberId": { "type": "string", "maxLength": 128 },
+        "memberName": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 20 },
+        "status": { "type": "string", "enum": ["sent", "delivered", "failed"] },
+        "errorMessage": { "type": "string" },
+        "dispatchedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["trackingKey", "type", "memberId", "memberName", "phone", "status", "dispatchedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile and assigned gym mappings"
+    },
+    "/members/{memberId}": {
+      "schema": "Member",
+      "description": "Gym members collection"
+    },
+    "/packages/{packageId}": {
+      "schema": "MembershipPackage",
+      "description": "Gym membership packages collection"
+    },
+    "/payments/{paymentId}": {
+      "schema": "PaymentRecord",
+      "description": "Financial payment receipts collection"
+    },
+    "/trainers/{trainerId}": {
+      "schema": "Trainer",
+      "description": "Coaches and trainers collection"
+    },
+    "/enquiries/{enquiryId}": {
+      "schema": "Enquiry",
+      "description": "Leads and prospective member inquiries"
+    },
+    "/whatsappLogs/{logId}": {
+      "schema": "WhatsAppLog",
+      "description": "WhatsApp automation dispatch logs"
+    },
+    "/settings/{settingId}": {
+      "schema": "GymSettings",
+      "description": "Global gym configuration doc (id: 'general')"
+    },
+    "/consentRecords/{consentId}": {
+      "schema": "ConsentRecord",
+      "description": "Granular DPDP consent records collection"
+    },
+    "/dataSubjectRequests/{requestId}": {
+      "schema": "DataSubjectRequest",
+      "description": "DPDP Data Principal rights requests collection"
+    },
+    "/gyms/{gymId}/whatsappMessages/{messageId}": {
+      "schema": "WhatsAppMessage",
+      "description": "Gym-specific WhatsApp transactional and automated message logs"
+    },
+    "/gyms/{gymId}/automations_sent/{key}": {
+      "schema": "AutomationSentRecord",
+      "description": "Gym-specific automation dispatch deduplication tracking records"
+    }
+  }
+}

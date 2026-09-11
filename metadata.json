@@ -1,0 +1,6 @@
+{
+  "name": "Black Stone Fitness (BSF) Mysuru",
+  "description": "Premium fitness brand website and streamlined gym management software for Black Stone Fitness Mysuru with automated WhatsApp notifications, financial analytics, coach management, and comprehensive exercise library.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
