@@ -23,9 +23,33 @@ import { MembershipPackage } from './types';
 const MainAppContent: React.FC = () => {
   const { isAdminAuthenticated } = useGym();
 
-  // Navigation state: 'public' | 'admin'
-  const [mainView, setMainView] = useState<'public' | 'admin'>('public');
+  // Navigation state: 'public' | 'admin' - supports URL hash (#admin) or persistent admin state
+  const [mainView, setMainView] = useState<'public' | 'admin'>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.toLowerCase();
+      const path = window.location.pathname.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      if (hash.includes('admin') || path.includes('/admin') || search.includes('view=admin')) {
+        return 'admin';
+      }
+    }
+    return 'public';
+  });
   const [publicSubview, setPublicSubview] = useState<'home' | 'exercises' | 'calculators'>('home');
+
+  // Sync hash changes in host/published environments
+  React.useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash.toLowerCase();
+      if (hash.includes('admin')) {
+        setMainView('admin');
+      } else if (hash === '#home' || hash === '' || hash === '#public') {
+        setMainView('public');
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   // Modals state
   const [isTrialModalOpen, setIsTrialModalOpen] = useState(false);
@@ -52,7 +76,12 @@ const MainAppContent: React.FC = () => {
     return (
       <>
         <AdminDashboard
-          onBackToPublicSite={() => setMainView('public')}
+          onBackToPublicSite={() => {
+            setMainView('public');
+            if (typeof window !== 'undefined' && window.location.hash.includes('admin')) {
+              history.replaceState(null, '', window.location.pathname);
+            }
+          }}
         />
         <CookieConsentBanner onOpenPrivacyNotice={() => setIsPrivacyNoticeModalOpen(true)} />
         <PrivacyNoticeModal
@@ -154,7 +183,12 @@ const MainAppContent: React.FC = () => {
       <AdminLoginModal
         isOpen={isAdminLoginModalOpen}
         onClose={() => setIsAdminLoginModalOpen(false)}
-        onSuccess={() => setMainView('admin')}
+        onSuccess={() => {
+          setMainView('admin');
+          if (typeof window !== 'undefined') {
+            window.location.hash = 'admin';
+          }
+        }}
       />
 
       <PrivacyNoticeModal

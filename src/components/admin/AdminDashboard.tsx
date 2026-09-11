@@ -403,7 +403,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* Main Workspace Area */}
-      <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 overflow-y-auto max-h-screen bg-zinc-950/95 scroll-smooth">
+      <main id="bsf-admin-main-content" className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 overflow-y-auto max-h-screen bg-zinc-950/95 scroll-smooth">
         
         {/* Real-time Database Persistence Bar */}
         <div className="mb-6 bg-zinc-900/90 border border-zinc-800 backdrop-blur-md rounded-2xl p-3 sm:px-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
