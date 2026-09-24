@@ -51,41 +51,58 @@ export const AutomationStatusCard: React.FC<AutomationStatusCardProps> = ({ memb
     try {
       let msg = '';
       let msgType: any = 'custom';
+      let idempotencyKey = '';
+
       if (key === 'reminder7Days') {
         msg = (settings.reminder7DayTemplate || 'Hello {MEMBER_NAME}, your Black Stone Fitness membership will expire in 7 days on {EXPIRY_DATE}. Renew early to lock in your legacy rate! 💪')
           .replace(/{MEMBER_NAME}/gi, member.fullName)
           .replace(/{EXPIRY_DATE}/gi, member.expiryDate || '')
           .replace(/{DAYS_LEFT}/gi, '7');
         msgType = 'expiry_reminder';
+        idempotencyKey = `${member.id}:renewal:7`;
       } else if (key === 'reminder3Days') {
         msg = (settings.reminder3DayTemplate || "Hi {MEMBER_NAME}, only 3 days left on your BSF membership ({EXPIRY_DATE}). Don't break your workout streak! Visit the front desk or renew via UPI. 🏋️‍♂️")
           .replace(/{MEMBER_NAME}/gi, member.fullName)
           .replace(/{EXPIRY_DATE}/gi, member.expiryDate || '')
           .replace(/{DAYS_LEFT}/gi, '3');
         msgType = 'expiry_reminder';
+        idempotencyKey = `${member.id}:renewal:3`;
       } else if (key === 'reminder1Day') {
         msg = (settings.reminder1DayTemplate || 'FINAL REMINDER: Hi {MEMBER_NAME}, your BSF membership expires tomorrow ({EXPIRY_DATE}). Renew today to keep seamless gym access. ⚡')
           .replace(/{MEMBER_NAME}/gi, member.fullName)
           .replace(/{EXPIRY_DATE}/gi, member.expiryDate || '')
           .replace(/{DAYS_LEFT}/gi, '1');
         msgType = 'expiry_reminder';
+        idempotencyKey = `${member.id}:renewal:1`;
       } else if (key === 'birthdayWish') {
         msg = (settings.birthdayTemplate || '🎉 Happy Birthday, {MEMBER_NAME}! 🎂 The entire Black Stone Fitness family wishes you a healthy, strong, and powerhouse year ahead. Keep crushing your goals! 💪🔥')
           .replace(/{MEMBER_NAME}/gi, member.fullName);
         msgType = 'birthday';
+        idempotencyKey = `${member.id}:birthday:${new Date().getFullYear()}`;
       } else if (key === 'festivalGreetings') {
         msg = `✨ Black Stone Fitness Mysuru wishes you, ${member.fullName}, and your family a festive season filled with power, health, and happiness! 🌟 Stay relentless.`;
         msgType = 'announcement';
+        idempotencyKey = `${member.id}:festival:${new Date().getFullYear()}-${new Date().getMonth() + 1}`;
       }
 
       if (msg) {
-        await sendWhatsAppMessage(member.phone, member.fullName, msg, msgType);
-        setToggleFeedback(`Sent "${title}" WhatsApp to ${member.fullName}!`);
-        setTimeout(() => setToggleFeedback(null), 4000);
+        const res = await sendWhatsAppMessage(member.phone, member.fullName, msg, msgType, {
+          memberId: member.id,
+          idempotencyKey
+        });
+
+        if (res.isDuplicate) {
+          setToggleFeedback(`Notice: "${title}" was already sent earlier. Duplicate send prevented by idempotency lock.`);
+        } else if (res.success) {
+          setToggleFeedback(`Dispatched "${title}" WhatsApp to ${member.fullName}!`);
+        } else {
+          setToggleFeedback(`Failed to send: ${res.error || 'WhatsApp gateway error'}`);
+        }
+        setTimeout(() => setToggleFeedback(null), 5000);
       }
     } catch (e: any) {
       setToggleFeedback(`Failed to send: ${e.message || 'WhatsApp error'}`);
-      setTimeout(() => setToggleFeedback(null), 4000);
+      setTimeout(() => setToggleFeedback(null), 5000);
     } finally {
       setSendingKey(null);
     }
@@ -195,11 +212,11 @@ export const AutomationStatusCard: React.FC<AutomationStatusCardProps> = ({ memb
       )}
 
       <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-        {automationsList.map((auto) => {
+        {automationsList.map((auto, autoIdx) => {
           const Icon = auto.icon;
           return (
             <div
-              key={auto.id}
+              key={`${auto.id}-${autoIdx}`}
               className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 first:pt-0 last:pb-0"
             >
               <div className="flex items-center gap-3">

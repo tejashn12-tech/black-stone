@@ -44,7 +44,9 @@ import {
   Eye,
   Maximize2,
   IndianRupee,
-  ArrowUpDown
+  ArrowUpDown,
+  Send,
+  ExternalLink
 } from 'lucide-react';
 
 type MemberStatusTab = 'all' | 'active' | 'expiring_soon' | 'inactive' | 'payment_due';
@@ -62,7 +64,9 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
     deleteMember,
     renewMember,
     recordPayment,
-    recordConsent
+    recordConsent,
+    sendWhatsAppMessage,
+    whatsAppSession
   } = useGym();
 
   const [selectedProfileMemberId, setSelectedProfileMemberId] = useState<string | null>(initialMemberId || null);
@@ -76,6 +80,20 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
   const [isRenewModalOpen, setIsRenewModalOpen] = useState<boolean>(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [activeMember, setActiveMember] = useState<Member | null>(null);
+
+  // Renewal WhatsApp Notification States
+  const [renewSendWhatsApp, setRenewSendWhatsApp] = useState<boolean>(true);
+  const [renewCustomMessage, setRenewCustomMessage] = useState<string>('');
+  const [isRenewing, setIsRenewing] = useState<boolean>(false);
+  const [renewalSuccessNotice, setRenewalSuccessNotice] = useState<{
+    memberName: string;
+    phone: string;
+    newExpiry: string;
+    packageName: string;
+    amount: number;
+    messageText: string;
+    directUrl?: string;
+  } | null>(null);
 
   // Live Camera Photo Capture States
   const [photoCaptureMember, setPhotoCaptureMember] = useState<Member | null>(null);
@@ -417,30 +435,136 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
     setIsEditModalOpen(false);
   };
 
+  // Generate formatted WhatsApp message for renewal
+  const generateRenewalWhatsAppText = (
+    member: Member,
+    pkg: MembershipPackage,
+    paidAmount: number,
+    paymentMethod: string,
+    newExpiryDate: string
+  ) => {
+    return `✅ *MEMBERSHIP RENEWED - BLACK STONE FITNESS* 💪🏋️‍♂️\n\n` +
+      `Dear ${member.fullName},\n` +
+      `Great news! Your gym membership at *Black Stone Fitness* has been successfully renewed!\n\n` +
+      `• *Member Code:* ${member.memberCode}\n` +
+      `• *Package:* ${pkg.name} (${pkg.durationMonths} Months)\n` +
+      `• *New Expiry Date:* ${newExpiryDate}\n` +
+      `• *Amount Paid:* ₹${paidAmount.toLocaleString('en-IN')}\n` +
+      `• *Payment Mode:* ${paymentMethod}\n\n` +
+      `Thank you for staying committed to your fitness goals. See you on the gym floor!\n\n` +
+      `📍 Black Stone Fitness, New Kantharaj Urs Road, Mysuru\n` +
+      `Stay strong & keep crushing your workouts! 🔥`;
+  };
+
   // Open Renewal Modal
   const handleOpenRenew = (member: Member) => {
     setActiveMember(member);
     const pkg = packages.find(p => p.id === member.packageId) || packages[0];
-    setRenewPkgId(pkg?.id || 'pkg-12');
-    setRenewPaidAmount(pkg?.price || 9999);
+    const pkgId = pkg?.id || 'pkg-12';
+    const pkgPrice = pkg?.price || 9999;
+    setRenewPkgId(pkgId);
+    setRenewPaidAmount(pkgPrice);
+    setRenewPaymentMethod('UPI');
+    setRenewSendWhatsApp(true);
+
+    const currentExpiry = new Date(member.expiryDate);
+    const now = new Date();
+    const baseDate = currentExpiry > now ? currentExpiry : now;
+    const newExpiry = new Date(baseDate);
+    newExpiry.setMonth(newExpiry.getMonth() + (pkg?.durationMonths || 12));
+    const newExpiryStr = newExpiry.toISOString().split('T')[0];
+
+    const initialMsg = generateRenewalWhatsAppText(member, pkg, pkgPrice, 'UPI', newExpiryStr);
+    setRenewCustomMessage(initialMsg);
     setIsRenewModalOpen(true);
   };
 
-  const handleSubmitRenew = (e: React.FormEvent) => {
+  const handleRenewPkgChange = (newId: string) => {
+    setRenewPkgId(newId);
+    const selected = packages.find(p => p.id === newId);
+    if (selected && activeMember) {
+      setRenewPaidAmount(selected.price);
+      const currentExpiry = new Date(activeMember.expiryDate);
+      const now = new Date();
+      const baseDate = currentExpiry > now ? currentExpiry : now;
+      const newExpiry = new Date(baseDate);
+      newExpiry.setMonth(newExpiry.getMonth() + selected.durationMonths);
+      const newExpiryStr = newExpiry.toISOString().split('T')[0];
+      setRenewCustomMessage(generateRenewalWhatsAppText(activeMember, selected, selected.price, renewPaymentMethod, newExpiryStr));
+    }
+  };
+
+  const handleRenewPaymentMethodChange = (mode: PaymentRecord['paymentMethod']) => {
+    setRenewPaymentMethod(mode);
+    if (activeMember) {
+      const selected = packages.find(p => p.id === renewPkgId) || packages[0];
+      const currentExpiry = new Date(activeMember.expiryDate);
+      const now = new Date();
+      const baseDate = currentExpiry > now ? currentExpiry : now;
+      const newExpiry = new Date(baseDate);
+      newExpiry.setMonth(newExpiry.getMonth() + (selected?.durationMonths || 12));
+      const newExpiryStr = newExpiry.toISOString().split('T')[0];
+      setRenewCustomMessage(generateRenewalWhatsAppText(activeMember, selected, renewPaidAmount, mode, newExpiryStr));
+    }
+  };
+
+  const handleSubmitRenew = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeMember) return;
     const pkg = packages.find(p => p.id === renewPkgId);
     if (!pkg) return;
 
-    renewMember(
-      activeMember.id,
-      pkg.id,
-      pkg.durationMonths,
-      renewPaidAmount,
-      renewPaymentMethod,
-      `Front desk renewal for ${pkg.name}`
-    );
-    setIsRenewModalOpen(false);
+    setIsRenewing(true);
+    try {
+      const currentExpiry = new Date(activeMember.expiryDate);
+      const now = new Date();
+      const baseDate = currentExpiry > now ? currentExpiry : now;
+      const newExpiry = new Date(baseDate);
+      newExpiry.setMonth(newExpiry.getMonth() + pkg.durationMonths);
+      const newExpiryStr = newExpiry.toISOString().split('T')[0];
+
+      const renewalResult = renewMember(
+        activeMember.id,
+        pkg.id,
+        pkg.durationMonths,
+        renewPaidAmount,
+        renewPaymentMethod,
+        `Front desk renewal for ${pkg.name}`
+      );
+
+      const targetPhone = activeMember.whatsapp || activeMember.phone || '+91 98803 97294';
+      const cleanDigits = targetPhone.replace(/\D/g, '');
+      const recipientPhone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+      const fullWhatsAppPhone = `91${recipientPhone10}`;
+
+      const msgToSend = renewCustomMessage.trim() || generateRenewalWhatsAppText(activeMember, pkg, renewPaidAmount, renewPaymentMethod, newExpiryStr);
+      const directUrl = `https://wa.me/${fullWhatsAppPhone}?text=${encodeURIComponent(msgToSend)}`;
+
+      if (renewSendWhatsApp) {
+        await sendWhatsAppMessage(
+          targetPhone,
+          activeMember.fullName,
+          msgToSend,
+          'expiry_reminder'
+        );
+      }
+
+      setRenewalSuccessNotice({
+        memberName: activeMember.fullName,
+        phone: targetPhone,
+        newExpiry: newExpiryStr,
+        packageName: pkg.name,
+        amount: renewPaidAmount,
+        messageText: msgToSend,
+        directUrl
+      });
+
+      setIsRenewModalOpen(false);
+    } catch (err) {
+      console.error('Renewal processing error:', err);
+    } finally {
+      setIsRenewing(false);
+    }
   };
 
   // Export current members to CSV
@@ -515,6 +639,53 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
   return (
     <div className="space-y-6" id="bsf-admin-member-management">
       
+      {/* WhatsApp Renewal Success Toast Banner */}
+      {renewalSuccessNotice && (
+        <div className="bg-emerald-950/80 border border-emerald-500/50 rounded-2xl p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 text-emerald-100 shadow-xl shadow-emerald-950/40 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0 mt-0.5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="font-bold text-white text-sm">
+                  Membership Renewed & WhatsApp Dispatched!
+                </h4>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 font-mono px-2 py-0.5 rounded-full border border-emerald-500/30">
+                  {renewalSuccessNotice.phone}
+                </span>
+              </div>
+              <p className="text-xs text-emerald-200/90 mt-0.5">
+                <strong className="text-white">{renewalSuccessNotice.memberName}</strong>'s membership was renewed for <strong className="text-white">{renewalSuccessNotice.packageName}</strong> until <strong className="text-white">{renewalSuccessNotice.newExpiry}</strong>. Payment of ₹{renewalSuccessNotice.amount.toLocaleString('en-IN')} recorded.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
+            {renewalSuccessNotice.directUrl && (
+              <a
+                href={renewalSuccessNotice.directUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs rounded-xl flex items-center gap-1.5 transition shadow-sm"
+              >
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>Open in WhatsApp Web</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={() => setRenewalSuccessNotice(null)}
+              className="p-1.5 text-emerald-300 hover:text-white rounded-lg hover:bg-emerald-900/50 transition"
+              title="Dismiss notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Top Header & Action */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-zinc-800/80">
         <div>
@@ -1037,21 +1208,23 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
                             <span className="hidden 2xl:inline">{m.photoUrl ? 'Photo' : 'Snap'}</span>
                           </button>
 
-                          {/* Quick Renew Button */}
+                          {/* Quick Renew Button with WhatsApp Automation */}
                           <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
                               handleOpenRenew(m);
                             }}
-                            className={`px-2 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm active:scale-95 group/renew ${
                               isExpiring || isExpired
-                                ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 hover:bg-sky-500/30'
-                                : 'bg-zinc-800 text-zinc-300 hover:text-white hover:bg-zinc-700'
+                                ? 'bg-amber-500/20 hover:bg-amber-500/35 text-amber-200 border border-amber-500/50 hover:border-amber-400 shadow-amber-500/10'
+                                : 'bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 hover:text-emerald-100 border border-emerald-500/50 hover:border-emerald-400 shadow-emerald-500/10'
                             }`}
-                            title="Renew Membership Plan"
+                            title={`Renew membership & send WhatsApp confirmation to ${m.fullName}`}
                           >
-                            <RefreshCw className="w-3.5 h-3.5" />
-                            <span className="hidden xl:inline">Renew</span>
+                            <RefreshCw className="w-3.5 h-3.5 text-emerald-400 group-hover/renew:rotate-180 transition-transform duration-500" />
+                            <span>Renew</span>
+                            <span className="text-[9px] font-mono uppercase px-1 py-0.2 rounded bg-emerald-400/20 text-emerald-300 border border-emerald-400/30 hidden md:inline">WA</span>
                           </button>
 
                           {/* WhatsApp Direct & Integration Messenger */}
@@ -1386,76 +1559,175 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
         </div>
       )}
 
-      {/* Renew Modal */}
-      {isRenewModalOpen && activeMember && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm">
-          <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-700 rounded-3xl p-6 space-y-5 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-              <h3 className="text-lg font-black text-white font-display">RENEW PLAN FOR {activeMember.fullName}</h3>
-              <button onClick={() => setIsRenewModalOpen(false)} className="text-zinc-400 hover:text-white">✕</button>
-            </div>
+      {/* Renew Modal with WhatsApp Integration */}
+      {isRenewModalOpen && activeMember && (() => {
+        const currentPkg = packages.find(p => p.id === renewPkgId) || packages[0];
+        const currentExpiry = new Date(activeMember.expiryDate);
+        const now = new Date();
+        const baseDate = currentExpiry > now ? currentExpiry : now;
+        const calculatedNewExpiry = new Date(baseDate);
+        calculatedNewExpiry.setMonth(calculatedNewExpiry.getMonth() + (currentPkg?.durationMonths || 12));
+        const calculatedNewExpiryStr = calculatedNewExpiry.toISOString().split('T')[0];
+        const memberPhone = activeMember.whatsapp || activeMember.phone || '+91 98803 97294';
 
-            <form onSubmit={handleSubmitRenew} className="space-y-4 text-xs">
-              <div>
-                <label className="block font-semibold text-zinc-400 uppercase mb-1">Renewal Package</label>
-                <select
-                  value={renewPkgId}
-                  onChange={e => {
-                    const id = e.target.value;
-                    setRenewPkgId(id);
-                    const selected = packages.find(p => p.id === id);
-                    if (selected) setRenewPaidAmount(selected.price);
-                  }}
-                  className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-white focus:border-orange-400 focus:outline-none"
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm overflow-y-auto">
+            <div className="relative w-full max-w-lg bg-zinc-900 border border-zinc-700 rounded-3xl p-6 space-y-4 shadow-2xl my-8">
+              <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                    <RefreshCw className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-white font-display uppercase tracking-tight">
+                      RENEW MEMBERSHIP PLAN
+                    </h3>
+                    <p className="text-[11px] text-zinc-400">
+                      {activeMember.fullName} • <span className="font-mono text-zinc-300">{activeMember.memberCode}</span>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsRenewModalOpen(false)}
+                  className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800 transition"
                 >
-                  {packages.map(pkg => (
-                    <option key={pkg.id} value={pkg.id}>
-                      {pkg.name} ({pkg.durationMonths} Mo) — ₹{pkg.price.toLocaleString('en-IN')}
-                    </option>
-                  ))}
-                </select>
+                  <X className="w-5 h-5" />
+                </button>
               </div>
 
-              <div>
-                <label className="block font-semibold text-zinc-400 uppercase mb-1">Amount Paid (INR)</label>
-                <input
-                  type="number"
-                  value={renewPaidAmount}
-                  onChange={e => setRenewPaidAmount(Number(e.target.value))}
-                  className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-white font-mono focus:border-orange-400 focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block font-semibold text-zinc-400 uppercase mb-1">Payment Method</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['UPI', 'Card', 'Cash'] as const).map(mode => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setRenewPaymentMethod(mode)}
-                      className={`py-2 rounded-xl border text-center font-bold transition ${
-                        renewPaymentMethod === mode
-                          ? 'bg-orange-400 text-black border-orange-400'
-                          : 'bg-zinc-950 text-zinc-400 border-zinc-800'
-                      }`}
-                    >
-                      {mode}
-                    </button>
-                  ))}
+              {/* Renewal Expiry & Target Card */}
+              <div className="grid grid-cols-2 gap-2.5 p-3 rounded-2xl bg-zinc-950 border border-zinc-800/80 text-xs">
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-zinc-400 block mb-0.5">Current Expiry</span>
+                  <div className="font-mono text-zinc-300 font-bold">
+                    {activeMember.expiryDate}
+                  </div>
+                </div>
+                <div className="border-l border-zinc-800 pl-3">
+                  <span className="text-[10px] uppercase font-bold text-emerald-400 block mb-0.5 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> New Expiry (+{currentPkg?.durationMonths || 12} Mo)
+                  </span>
+                  <div className="font-mono text-emerald-300 font-bold">
+                    {calculatedNewExpiryStr}
+                  </div>
                 </div>
               </div>
 
-              <button
-                type="submit"
-                className="w-full py-3 bg-orange-400 hover:bg-orange-300 text-black font-extrabold rounded-xl transition uppercase tracking-wider"
-              >
-                Confirm Renewal & Send Receipt
-              </button>
-            </form>
+              <form onSubmit={handleSubmitRenew} className="space-y-4 text-xs">
+                <div>
+                  <label className="block font-semibold text-zinc-400 uppercase mb-1">Renewal Package</label>
+                  <select
+                    value={renewPkgId}
+                    onChange={e => handleRenewPkgChange(e.target.value)}
+                    className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-white focus:border-emerald-500 focus:outline-none"
+                  >
+                    {packages.map(pkg => (
+                      <option key={pkg.id} value={pkg.id}>
+                        {pkg.name} ({pkg.durationMonths} Mo) — ₹{pkg.price.toLocaleString('en-IN')}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-zinc-400 uppercase mb-1">Amount Paid (INR)</label>
+                    <input
+                      type="number"
+                      value={renewPaidAmount}
+                      onChange={e => {
+                        const val = Number(e.target.value);
+                        setRenewPaidAmount(val);
+                        if (activeMember && currentPkg) {
+                          setRenewCustomMessage(generateRenewalWhatsAppText(activeMember, currentPkg, val, renewPaymentMethod, calculatedNewExpiryStr));
+                        }
+                      }}
+                      className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-white font-mono focus:border-emerald-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-zinc-400 uppercase mb-1">Payment Method</label>
+                    <div className="grid grid-cols-3 gap-1">
+                      {(['UPI', 'Card', 'Cash'] as const).map(mode => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => handleRenewPaymentMethodChange(mode)}
+                          className={`py-2 rounded-xl border text-center font-bold transition text-[11px] ${
+                            renewPaymentMethod === mode
+                              ? 'bg-emerald-500 text-black border-emerald-500'
+                              : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-700'
+                          }`}
+                        >
+                          {mode}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* WhatsApp Renewal Message Dispatch Section */}
+                <div className="p-3.5 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={renewSendWhatsApp}
+                        onChange={e => setRenewSendWhatsApp(e.target.checked)}
+                        className="w-4 h-4 rounded text-emerald-500 bg-zinc-900 border-zinc-700 focus:ring-emerald-500"
+                      />
+                      <span className="font-bold text-emerald-300 text-xs flex items-center gap-1.5">
+                        <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+                        Send WhatsApp Confirmation
+                      </span>
+                    </label>
+
+                    <span className="text-[10px] font-mono text-emerald-400/90 bg-emerald-900/40 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                      📱 {memberPhone}
+                    </span>
+                  </div>
+
+                  {renewSendWhatsApp && (
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] text-zinc-400">
+                        Message will be sent to <strong className="text-white">{activeMember.fullName}</strong> upon renewal:
+                      </div>
+                      <textarea
+                        rows={5}
+                        value={renewCustomMessage}
+                        onChange={e => setRenewCustomMessage(e.target.value)}
+                        className="w-full px-3 py-2 bg-zinc-950 border border-emerald-500/30 rounded-xl text-zinc-200 text-xs font-mono leading-relaxed focus:border-emerald-400 focus:outline-none resize-none"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="pt-1">
+                  <button
+                    type="submit"
+                    disabled={isRenewing}
+                    className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-black font-extrabold rounded-xl transition uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 text-xs cursor-pointer"
+                  >
+                    {isRenewing ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin text-black" />
+                        <span>Processing Renewal & WhatsApp...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 text-black" />
+                        <span>Confirm Renewal & Send WhatsApp Message</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Bulk Member File Upload / Ingest Modal */}
       <MemberBulkUploadModal

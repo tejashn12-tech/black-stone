@@ -120,9 +120,9 @@ export const CommunicationTab: React.FC<CommunicationTabProps> = ({ member, onOp
 
       {/* Timeline List */}
       <div className="space-y-3">
-        {displayLogs.map((log) => (
+        {displayLogs.map((log, index) => (
           <div
-            key={log.id}
+            key={`${log.id}-${index}`}
             className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950/60 flex flex-col sm:flex-row sm:items-start justify-between gap-3"
           >
             <div className="flex items-start gap-3">

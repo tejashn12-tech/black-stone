@@ -4,95 +4,10 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { initializeFirebaseAdmin } from './config/firebase';
-import { logger, baileysLogger } from './utils/logger';
-import { sessionManager } from './services/WhatsAppSessionManager';
-import { automationService } from './services/WhatsAppAutomationService';
-import whatsappRoutes from './routes/whatsappRoutes';
-
-// Suppress unhandled libsignal cryptographic decryption warnings and Firestore quota stream errors
-// Libsignal in @whiskeysockets/baileys hardcodes calls to console.error when incoming sync/group packets
-// cannot be decrypted with previous session keys. Route these to debug logs instead.
-const originalConsoleError = console.error;
-console.error = (...args: any[]) => {
-  const isBenign = args.some((arg) => {
-    const text = typeof arg === 'string' ? arg : (arg && (arg.message || arg.stack || (typeof arg.toString === 'function' ? arg.toString() : '')));
-    return (
-      typeof text === 'string' &&
-      (text.includes('Failed to decrypt message with any known session') ||
-        text.includes('Session error') ||
-        text.includes('SessionError') ||
-        text.includes('No session record') ||
-        text.includes('No matching sessions found') ||
-        text.includes('Bad MAC') ||
-        text.includes('session_cipher.js') ||
-        text.includes('failed to decrypt message') ||
-        text.includes('RESOURCE_EXHAUSTED') ||
-        text.includes('resource-exhausted') ||
-        text.includes('Quota limit exceeded') ||
-        text.includes('Free daily write units') ||
-        text.includes('free tier database') ||
-        text.includes('GrpcConnection') ||
-        text.includes('RPC \'Write\' stream'))
-    );
-  });
-
-  if (isBenign) {
-    baileysLogger.debug({ notice: args[0] }, 'Suppressed benign warning/notice');
-    return;
-  }
-  originalConsoleError.apply(console, args);
-};
-
-// Global Node process safety: prevent unhandled libsignal session rejections or socket retries from crashing
-process.on('unhandledRejection', (reason: any) => {
-  const errMsg = reason instanceof Error ? reason.message : String(reason);
-  const errStack = reason instanceof Error ? reason.stack || '' : '';
-  if (
-    errMsg.includes('SessionError') ||
-    errMsg.includes('No session record') ||
-    errMsg.includes('Bad MAC') ||
-    errMsg.includes('No matching sessions found') ||
-    errMsg.includes('init queries') ||
-    errMsg.includes('Timed Out') ||
-    errMsg.includes('RESOURCE_EXHAUSTED') ||
-    errMsg.includes('resource-exhausted') ||
-    errMsg.includes('Quota limit exceeded') ||
-    errMsg.includes('Free daily write units') ||
-    errMsg.includes('GrpcConnection') ||
-    errStack.includes('session_cipher.js') ||
-    errStack.includes('executeInitQueries') ||
-    errStack.includes('fetchProps')
-  ) {
-    baileysLogger.debug({ notice: errMsg }, 'Suppressed benign unhandled libsignal/firestore rejection');
-    return;
-  }
-  logger.warn({ error: errMsg, stack: errStack }, 'Unhandled promise rejection in server process');
-});
-
-process.on('uncaughtException', (err: any) => {
-  const errMsg = err?.message || String(err);
-  const errStack = err?.stack || '';
-  if (
-    errMsg.includes('SessionError') ||
-    errMsg.includes('No session record') ||
-    errMsg.includes('Bad MAC') ||
-    errMsg.includes('No matching sessions found') ||
-    errMsg.includes('init queries') ||
-    errMsg.includes('Timed Out') ||
-    errMsg.includes('RESOURCE_EXHAUSTED') ||
-    errMsg.includes('resource-exhausted') ||
-    errMsg.includes('Quota limit exceeded') ||
-    errMsg.includes('Free daily write units') ||
-    errMsg.includes('GrpcConnection') ||
-    errStack.includes('session_cipher.js') ||
-    errStack.includes('executeInitQueries') ||
-    errStack.includes('fetchProps')
-  ) {
-    baileysLogger.debug({ notice: errMsg }, 'Suppressed benign uncaught libsignal/firestore exception');
-    return;
-  }
-  logger.error({ error: errMsg, stack: errStack }, 'Uncaught exception in server process');
-});
+import { logger } from './utils/logger';
+import { whatsappRoutes } from './routes/whatsappRoutes';
+import { WhatsAppService } from './whatsapp/WhatsAppService';
+import { RenewalAutomationService } from './whatsapp/automation/RenewalAutomationService';
 
 dotenv.config();
 
@@ -168,14 +83,12 @@ const isOriginAllowed = (origin: string): boolean => {
     return true;
   }
 
-  // Gracefully allow origins to prevent breaking web clients
   return true;
 };
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, server-to-server, curl, same-origin)
       if (!origin) return callback(null, true);
 
       if (isOriginAllowed(origin)) {
@@ -202,11 +115,11 @@ app.use(express.urlencoded({ extended: true }));
 app.get(['/health', '/api/health'], (_req, res) => {
   res.json({
     status: 'ok',
-    service: 'BSF WhatsApp Service',
+    service: 'BSF API Service',
   });
 });
 
-// Mount BSF WhatsApp Service API Routes
+// WhatsApp API Gateway
 app.use('/api/whatsapp', whatsappRoutes);
 
 // Global error handling middleware for API routes
@@ -223,7 +136,6 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 
 // Start server with Vite middleware in development or static serve in production
 async function startServer() {
-  // 1. Mount Vite middleware in development or static serve in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },
@@ -238,36 +150,37 @@ async function startServer() {
     });
   }
 
-  // 2. Bind and listen on port 3000 immediately so dev server readiness checks pass instantly
   const server = app.listen(PORT, '0.0.0.0', () => {
-    logger.info(`BSF WhatsApp Service running on http://0.0.0.0:${PORT}`);
-
-    // 3. Asynchronously initialize WhatsApp background recovery, keep-alive daemon & scheduler without delaying port binding
-    setImmediate(async () => {
-      try {
-        await sessionManager.restoreExistingSessions();
-        sessionManager.startKeepAliveDaemon();
-        logger.info('WhatsApp continuous keep-alive & auto-heal daemon active');
-      } catch (recErr: any) {
-        logger.warn({ error: recErr?.message }, 'Restart recovery warning');
-      }
-
-      try {
-        automationService.startBackgroundScheduler('bsf-mysuru');
-        logger.info('WhatsApp automated scheduler initialized for bsf-mysuru');
-      } catch (autoErr: any) {
-        logger.warn({ error: autoErr?.message }, 'WhatsApp automated scheduler startup warning');
-      }
-    });
+    logger.info(`BSF Server running on http://0.0.0.0:${PORT}`);
   });
 
-  // Graceful shutdown
+  // Initialize WhatsApp service on server boot
+  try {
+    WhatsAppService.getInstance().initialize().catch((waInitErr) => {
+      logger.warn({ error: waInitErr?.message }, 'WhatsApp background initialization notice');
+    });
+  } catch (err: any) {
+    logger.warn({ error: err?.message }, 'WhatsApp initialization notice');
+  }
+
+  // Start Server-Side Membership Renewal Automation Scheduler
+  try {
+    RenewalAutomationService.getInstance().startScheduler();
+    logger.info('BSF Server-side Renewal Automation Scheduler started (Asia/Kolkata timezone)');
+  } catch (autoErr: any) {
+    logger.warn({ error: autoErr?.message }, 'Renewal scheduler initialization notice');
+  }
+
   const handleShutdown = async (signal: string) => {
-    logger.info({ signal }, 'Shutdown signal received. Closing BSF WhatsApp Service...');
-    server.close(async () => {
-      automationService.stopBackgroundScheduler();
-      await sessionManager.shutdown();
-      logger.info('All WhatsApp sockets and HTTP listeners closed safely.');
+    logger.info({ signal }, 'Shutdown signal received. Closing BSF Server...');
+    try {
+      RenewalAutomationService.getInstance().stopScheduler();
+    } catch {}
+    try {
+      await WhatsAppService.getInstance().shutdown();
+    } catch {}
+    server.close(() => {
+      logger.info('HTTP listeners closed safely.');
       process.exit(0);
     });
   };

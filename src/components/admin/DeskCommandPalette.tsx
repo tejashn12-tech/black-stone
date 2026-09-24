@@ -157,7 +157,7 @@ export const DeskCommandPalette: React.FC<DeskCommandPaletteProps> = ({
       },
       {
         id: 'act-whatsapp',
-        title: 'WhatsApp Gateway & QR Code Scan',
+        title: 'WhatsApp Gateway',
         category: 'Integration',
         icon: MessageSquare,
         color: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',

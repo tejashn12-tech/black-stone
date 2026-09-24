@@ -281,8 +281,8 @@ export const SubscriptionsTab: React.FC<SubscriptionsTabProps> = ({
                     </td>
                   </tr>
                 ) : (
-                  membershipPlans.map((plan) => (
-                    <tr key={plan.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
+                  membershipPlans.map((plan, pIdx) => (
+                    <tr key={`${plan.id}-${pIdx}`} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
                       <td className="py-3.5 px-3.5">
                         <div className="flex items-center gap-2">
                           <span className="w-2 h-2 rounded-full bg-orange-500 shrink-0" />
@@ -478,8 +478,8 @@ export const SubscriptionsTab: React.FC<SubscriptionsTabProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800 font-medium">
-                    {personalTrainingSubs.map((pt) => (
-                      <tr key={pt.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
+                    {personalTrainingSubs.map((pt, ptIdx) => (
+                      <tr key={`${pt.id}-${ptIdx}`} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
                         <td className="py-3.5 px-3.5">
                           <p className="font-bold text-zinc-900 dark:text-white">{pt.membershipName}</p>
                           <span className="text-[10px] text-indigo-500 font-mono">1-on-1 Coaching</span>

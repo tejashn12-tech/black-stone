@@ -18,8 +18,11 @@ import {
   Clock,
   User,
   ShieldCheck,
-  Zap
+  Zap,
+  Check,
+  CheckCheck
 } from 'lucide-react';
+import { WhatsAppStatusBadge } from './WhatsAppStatusBadge';
 
 export type WhatsAppMessageType = 'renewal' | 'birthday' | 'payment_due' | 'welcome' | 'custom';
 
@@ -42,8 +45,17 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
   const [messageText, setMessageText] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const [sendSuccess, setSendSuccess] = useState<boolean>(false);
+  const [sentState, setSentState] = useState<{ status: string; statusDisplay: string; messageId?: string } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
+  const [draftKey, setDraftKey] = useState<string>(() => `manual:${member?.id || 'draft'}:${Date.now()}`);
+
+  // Refresh draft key when modal reopens or member changes
+  useEffect(() => {
+    if (isOpen && member) {
+      setDraftKey(`manual:${member.id}:${messageType}:${Date.now()}`);
+    }
+  }, [isOpen, member?.id, messageType]);
 
   // Clean recipient phone
   const rawPhone = member?.whatsapp || member?.phone || '';
@@ -142,14 +154,22 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
         recipientPhone10 ? `+91 ${recipientPhone10}` : member.phone,
         member.fullName,
         messageText.trim(),
-        logType
+        logType,
+        {
+          memberId: member.id,
+          idempotencyKey: draftKey
+        }
       );
 
       if (res.success) {
+        setSentState({
+          status: res.status || 'SENT',
+          statusDisplay: res.statusDisplay || (res.isDuplicate ? 'Already Sent (Duplicate Prevented)' : 'Accepted by WhatsApp Connection'),
+          messageId: res.messageId
+        });
         setSendSuccess(true);
-        setTimeout(() => {
-          setSendSuccess(false);
-        }, 4000);
+        // Regenerate key for next distinct send
+        setDraftKey(`manual:${member.id}:${messageType}:${Date.now()}`);
       } else {
         setSendError(res.error || 'Failed to dispatch via gateway. You can send directly using WhatsApp Web/App below.');
       }
@@ -397,18 +417,18 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
             </div>
           </div>
 
-          {/* Gateway Status Notification Banner */}
+          {/* Status Notification Banner */}
           <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex items-center justify-between gap-3 text-xs">
             <div className="flex items-center gap-2 text-zinc-300">
-              <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+              <ShieldCheck className={`w-4 h-4 shrink-0 ${isGatewayConnected ? 'text-emerald-400' : 'text-amber-400'}`} />
               <span>
                 {isGatewayConnected ? (
                   <>
-                    <strong className="text-emerald-400">Gateway Linked:</strong> {whatsAppSession.phoneNumber || '+91 98803 97294'} (Ready for 1-click dispatch)
+                    <strong className="text-emerald-400">Gateway Active:</strong> Ready for 1-click dispatch to +91 {recipientPhone10 || member.phone}
                   </>
                 ) : (
                   <>
-                    <strong className="text-amber-400">Direct Gateway Ready:</strong> Dispatch logs to audit history & supports 1-click WhatsApp app launch.
+                    <strong className="text-amber-400">Gateway Offline:</strong> You can send directly using WhatsApp Web/App below.
                   </>
                 )}
               </span>
@@ -425,41 +445,29 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
             </button>
           </div>
 
-          {/* Success feedback */}
-          {sendSuccess && (
-            <div className="p-3 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in duration-300">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span className="font-semibold">
-                Message successfully dispatched via WhatsApp integration to +91 {recipientPhone10}!
-              </span>
+          {sendSuccess && sentState && (
+            <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-white flex items-center gap-1.5">
+                  <Check className="w-4 h-4 text-zinc-300" />
+                  <span>Message accepted by WhatsApp connection</span>
+                </span>
+                <WhatsAppStatusBadge
+                  status={sentState.status}
+                  statusDisplay={sentState.statusDisplay}
+                  compact={true}
+                />
+              </div>
+              <p className="text-[11px] text-zinc-400">
+                Transmitted over the active Baileys socket. Delivery & read receipts are tracked live upon receipt from WhatsApp servers.
+              </p>
             </div>
           )}
 
-          {/* Error feedback with direct 1-click fallback */}
           {sendError && (
-            <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-red-200 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-300">
-              <div className="flex items-start sm:items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5 sm:mt-0" />
-                <span className="leading-relaxed">{sendError}</span>
-              </div>
-              <a
-                href={waMeUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => {
-                  sendWhatsAppMessage(
-                    recipientPhone10 ? `+91 ${recipientPhone10}` : member.phone,
-                    member.fullName,
-                    messageText.trim(),
-                    messageType === 'renewal' ? 'expiry_reminder' : messageType === 'birthday' ? 'birthday' : 'custom'
-                  );
-                }}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 shrink-0 transition"
-                title="Send directly using WhatsApp Web or Mobile App"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Send via WhatsApp Web/App</span>
-              </a>
+            <div className="p-3 rounded-xl bg-red-500/20 border border-red-500/40 text-red-300 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{sendError}</span>
             </div>
           )}
         </div>
@@ -475,51 +483,47 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
           </button>
 
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            {/* Secondary fallback: Open directly in WhatsApp Web / Mobile */}
+            {/* Direct fallback to WhatsApp Web / Mobile */}
             <a
               href={waMeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => {
-                // Log communication
-                sendWhatsAppMessage(
-                  recipientPhone10 ? `+91 ${recipientPhone10}` : member.phone,
-                  member.fullName,
-                  messageText.trim(),
-                  messageType === 'renewal' ? 'expiry_reminder' : messageType === 'birthday' ? 'birthday' : 'custom'
-                );
-              }}
-              className="flex-1 sm:flex-initial px-3.5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-emerald-400 hover:text-emerald-300 border border-zinc-700 hover:border-emerald-500/50 font-bold text-xs transition flex items-center justify-center gap-1.5"
+              className="flex-1 sm:flex-initial px-3.5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-emerald-400 hover:text-emerald-300 border border-zinc-700 hover:border-emerald-500/40 font-bold text-xs transition flex items-center justify-center gap-1.5"
               title="Open message in WhatsApp Web or native WhatsApp App"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              <span>WhatsApp Web / App</span>
+              <span>WhatsApp Web/App</span>
             </a>
 
-            {/* Primary Action: Send through WhatsApp Integration */}
-            <button
-              type="button"
-              onClick={handleSendViaGateway}
-              disabled={isSending || !messageText.trim()}
-              className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isSending ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Sending Message...</span>
-                </>
-              ) : sendSuccess ? (
-                <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Dispatched!</span>
-                </>
-              ) : (
-                <>
-                  <Send className="w-4 h-4" />
-                  <span>Send via WhatsApp Integration</span>
-                </>
-              )}
-            </button>
+            {isGatewayConnected ? (
+              <button
+                type="button"
+                onClick={handleSendViaGateway}
+                disabled={isSending || !messageText.trim()}
+                className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+              >
+                {isSending ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Dispatching...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-4 h-4" />
+                    <span>Send via Gateway</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleCopyText}
+                className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 border border-zinc-700"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>{copied ? 'Copied!' : 'Copy Text'}</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

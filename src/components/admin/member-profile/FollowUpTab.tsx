@@ -62,9 +62,9 @@ export const FollowUpTab: React.FC<FollowUpTabProps> = ({ member, onOpenModal })
       </div>
 
       <div className="space-y-3">
-        {followUps.map((log) => (
+        {followUps.map((log, index) => (
           <div
-            key={log.id}
+            key={`${log.id}-${index}`}
             className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950/60 space-y-2"
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-2">

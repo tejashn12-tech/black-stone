@@ -118,8 +118,8 @@ export const PaymentsTab: React.FC<PaymentsTabProps> = ({ member, onOpenModal })
                   </td>
                 </tr>
               ) : (
-                memberPayments.map((p) => (
-                  <tr key={p.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
+                memberPayments.map((p, idx) => (
+                  <tr key={`${p.id}-${idx}`} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition">
                     <td className="py-3 px-3 font-mono font-bold text-orange-600 dark:text-orange-400">
                       {p.receiptNo}
                     </td>

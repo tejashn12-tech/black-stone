@@ -18,14 +18,6 @@ import {
   WhatsAppConnectionStatus
 } from '../types';
 import {
-  pairWhatsAppDevice,
-  disconnectWhatsAppDevice,
-  dispatchWhatsAppApiMessage,
-  triggerLiveAutomationsRun,
-  fetchLiveAutomationsStatus,
-  sendTestAutomationMessage
-} from '../services/whatsappClient';
-import {
   INITIAL_MEMBERS,
   INITIAL_PACKAGES,
   INITIAL_PAYMENTS,
@@ -78,11 +70,17 @@ import {
   fsUpdateDSR,
   fsDeleteDSR,
   clearAllGymFirestoreData,
-  clearTrainersPlansAndUpiFirestore,
-  saveWhatsAppSessionToFirestore,
-  getWhatsAppSessionFromFirestore
+  clearTrainersPlansAndUpiFirestore
 } from '../lib/firestoreService';
 import { resolveMemberStatus, getEffectiveMemberStatus, isExpiringSoon, isActiveMember, compareMembersRecentlyJoined } from '../utils/memberStatus';
+import {
+  fetchWhatsAppStatus,
+  initiateWhatsAppConnect,
+  terminateWhatsAppSession,
+  dispatchWhatsAppMessage,
+  dispatchWhatsAppTest,
+  fetchWhatsAppMessages
+} from '../services/whatsappApiClient';
 import {
   STORAGE_KEYS,
   safeLocalStorageSet,
@@ -201,7 +199,13 @@ interface GymContextType {
   connectWhatsApp: (phoneNumber?: string) => Promise<boolean>;
   disconnectWhatsApp: () => Promise<void>;
   updateWhatsAppConfig: (updates: Partial<WhatsAppSessionData>) => void;
-  sendWhatsAppMessage: (recipientPhone: string, recipientName: string, text: string, type?: WhatsAppMessageLog['type']) => Promise<{ success: boolean; error?: string }>;
+  sendWhatsAppMessage: (
+    recipientPhone: string,
+    recipientName: string,
+    text: string,
+    type?: WhatsAppMessageLog['type'],
+    metadata?: { memberId?: string; receiptNo?: string; idempotencyKey?: string }
+  ) => Promise<{ success: boolean; error?: string; messageId?: string; status?: string; statusDisplay?: string; isDuplicate?: boolean }>;
   clearWhatsAppLogs: () => void;
   runWhatsAppAutomations: (options?: { force?: boolean; dryRun?: boolean; type?: 'all' | 'renewals' | 'birthdays' | 'festivals'; customDate?: string }) => Promise<{ success: boolean; summary?: any; error?: string }>;
   getUpcomingAutomationsSummary: (customDate?: string) => {
@@ -489,27 +493,20 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  // WhatsApp Integration State
+  // WhatsApp Integration State (Uninstalled)
   const DEFAULT_WHATSAPP_SESSION: WhatsAppSessionData = {
-    status: 'connected',
-    phoneNumber: '+91 8197299039',
-    connectedAt: new Date().toISOString(),
-    deviceInfo: 'WhatsApp Web Multi-Device (Chrome / Android 14)',
-    batteryLevel: 98,
-    autoReceipts: true,
-    autoExpiryReminders: true,
-    autoBirthdayWishes: true,
+    status: 'disconnected',
+    phoneNumber: '',
+    connectedAt: null,
+    deviceInfo: 'WhatsApp Integration Not Installed',
+    batteryLevel: 0,
+    autoReceipts: false,
+    autoExpiryReminders: false,
+    autoBirthdayWishes: false,
     autoAnnouncements: false
   };
 
-  const [whatsAppSession, setWhatsAppSession] = useState<WhatsAppSessionData>(() => {
-    try {
-      const saved = safeLocalStorageGet(STORAGE_KEYS.WHATSAPP_SESSION);
-      return saved ? JSON.parse(saved) : DEFAULT_WHATSAPP_SESSION;
-    } catch {
-      return DEFAULT_WHATSAPP_SESSION;
-    }
-  });
+  const [whatsAppSession, setWhatsAppSession] = useState<WhatsAppSessionData>(DEFAULT_WHATSAPP_SESSION);
 
   const [whatsAppLogs, setWhatsAppLogs] = useState<WhatsAppMessageLog[]>(() => {
     try {
@@ -652,68 +649,13 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               sData.upiId = '';
             }
             setSettings(sData);
-            // If settings indicates WhatsApp is connected, mirror to WhatsApp session state
-            if (sData.whatsappConnected) {
-              setWhatsAppSession(prev => {
-                if (prev.status !== 'connected') {
-                  const updated = {
-                    ...prev,
-                    status: 'connected' as const,
-                    phoneNumber: sData.whatsapp || '+91 8197299039',
-                    connectedAt: sData.whatsappConnectedAt || prev.connectedAt || new Date().toISOString()
-                  };
-                  safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_SESSION, JSON.stringify(updated));
-                  return updated;
-                }
-                return prev;
-              });
-            }
           }
         }, (error) => {
           handleFirestoreError(error, OperationType.GET, 'settings/general');
         });
         unsubs.push(unsubSettings);
 
-        // 7. WhatsApp Session Firestore sync across AI Studio & Published site
-        const unsubWhatsAppSession = onSnapshot(doc(db, COLLECTIONS.SETTINGS, 'whatsapp_session'), (snapshot) => {
-          if (snapshot.exists()) {
-            const data = snapshot.data();
-            if (data && data.status) {
-              setWhatsAppSession(prev => {
-                const merged: WhatsAppSessionData = {
-                  ...prev,
-                  status: data.status,
-                  phoneNumber: data.phoneNumber || prev.phoneNumber || '+91 8197299039',
-                  connectedAt: data.connectedAt ?? prev.connectedAt,
-                  deviceInfo: data.deviceInfo || prev.deviceInfo,
-                  batteryLevel: data.batteryLevel ?? prev.batteryLevel,
-                  autoReceipts: data.autoReceipts ?? prev.autoReceipts,
-                  autoExpiryReminders: data.autoExpiryReminders ?? prev.autoExpiryReminders,
-                  autoBirthdayWishes: data.autoBirthdayWishes ?? prev.autoBirthdayWishes,
-                  autoAnnouncements: data.autoAnnouncements ?? prev.autoAnnouncements,
-                };
-                safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_SESSION, JSON.stringify(merged));
-                return merged;
-              });
-            }
-          }
-        }, (error) => {
-          console.warn('WhatsApp session snapshot notice:', error);
-        });
-        unsubs.push(unsubWhatsAppSession);
-
-        // Immediate Firestore hydration on startup
-        getWhatsAppSessionFromFirestore().then((fsSession) => {
-          if (fsSession && fsSession.status === 'connected') {
-            setWhatsAppSession(prev => {
-              const updated = { ...prev, ...fsSession };
-              safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_SESSION, JSON.stringify(updated));
-              return updated;
-            });
-          }
-        }).catch(() => {});
-
-        // 8. DPDP Consent Records
+        // 7. DPDP Consent Records
         const unsubConsent = onSnapshot(collection(db, COLLECTIONS.CONSENT_RECORDS), (snapshot) => {
           if (!snapshot.empty) {
             const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ConsentRecord));
@@ -728,7 +670,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         unsubs.push(unsubConsent);
 
-        // 9. DPDP Data Subject Requests
+        // 8. DPDP Data Subject Requests
         const unsubDSR = onSnapshot(collection(db, COLLECTIONS.DATA_SUBJECT_REQUESTS), (snapshot) => {
           if (!snapshot.empty) {
             const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as DataSubjectRequest));
@@ -743,19 +685,46 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         unsubs.push(unsubDSR);
 
-        // 10. WhatsApp Logs Real-Time Sync across devices & automated dispatches
-        const unsubWhatsAppLogs = onSnapshot(collection(db, 'whatsappLogs'), (snapshot) => {
+        // 9. Real-time WhatsApp Message Status & Transition Stream
+        const unsubWALogs = onSnapshot(collection(db, 'whatsappLogs'), (snapshot) => {
           if (!snapshot.empty) {
-            const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as WhatsAppMessageLog));
-            const deduplicated = deduplicateById(data);
-            deduplicated.sort((a, b) => (b.timestamp > a.timestamp ? 1 : -1));
-            setWhatsAppLogs(deduplicated);
-            safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_LOGS, JSON.stringify(deduplicated.slice(0, 50)));
+            const mappedLogs: WhatsAppMessageLog[] = snapshot.docs.map(doc => {
+              const data = doc.data();
+              return {
+                id: doc.id,
+                recipientPhone: data.recipientPhone || '',
+                recipientName: data.recipientName || '',
+                type: data.type || 'custom',
+                message: data.content || data.message || '',
+                content: data.content || data.message || '',
+                status: data.status || 'SENT',
+                statusDisplay: data.statusDisplay || '',
+                timestamp: data.sentAt || data.createdAt || data.timestamp || new Date().toISOString(),
+                messageId: data.messageId || null,
+                sentAt: data.sentAt || null,
+                serverAckAt: data.serverAckAt || null,
+                deliveredAt: data.deliveredAt || null,
+                readAt: data.readAt || null,
+                failedAt: data.failedAt || null,
+                errorMessage: data.errorMessage || null,
+                transitions: data.transitions || [],
+                memberId: data.memberId || null,
+                receiptNo: data.receiptNo || null
+              };
+            });
+
+            // Sort newest first
+            mappedLogs.sort((a, b) =>
+              new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+            );
+
+            setWhatsAppLogs(mappedLogs);
+            safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_LOGS, JSON.stringify(mappedLogs.slice(0, 50)));
           }
         }, (error) => {
-          console.warn('WhatsApp logs snapshot notice:', error);
+          console.warn('[GymContext] WhatsApp logs snapshot notice:', error?.message);
         });
-        unsubs.push(unsubWhatsAppLogs);
+        unsubs.push(unsubWALogs);
 
       } catch (err) {
         console.warn('Firestore initial sync notice:', err);
@@ -828,6 +797,26 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       safeLocalStorageRemove(STORAGE_KEYS.SESSION_MEMBER);
     }
   }, [currentMember]);
+
+  // Sync WhatsApp status from backend gateway
+  const refreshWhatsAppStatus = async () => {
+    try {
+      const backendStatus = await fetchWhatsAppStatus();
+      setWhatsAppSession(prev => ({
+        ...prev,
+        status: backendStatus.status === 'connected' ? 'connected' : backendStatus.status === 'connecting' ? 'connecting' : 'disconnected',
+        phoneNumber: backendStatus.phoneNumber || prev.phoneNumber,
+        connectedAt: backendStatus.connectedAt || prev.connectedAt,
+        deviceInfo: backendStatus.deviceInfo || prev.deviceInfo
+      }));
+    } catch {}
+  };
+
+  useEffect(() => {
+    refreshWhatsAppStatus();
+    const interval = setInterval(refreshWhatsAppStatus, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Auth methods
   const loginAsMember = (phoneOrCode: string): boolean => {
@@ -1036,18 +1025,6 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updateMember(newPayment.memberId, {
         lastFeesPaid: newPayment.amountPaid
       });
-    }
-
-    // Auto-dispatch WhatsApp receipt if WhatsApp is connected and enabled
-    if (whatsAppSession.status === 'connected' && whatsAppSession.autoReceipts) {
-      sendWhatsAppMessage(
-        newPayment.memberPhone || '+91 98803 97294',
-        newPayment.memberName,
-        `Hello ${newPayment.memberName}, your payment of ₹${newPayment.amountPaid.toLocaleString('en-IN')} for Black Stone Fitness has been recorded successfully. Receipt No: ${receiptNo}. Thank you! 💪🏋️`,
-        'receipt'
-      );
-      newPayment.whatsappStatus = 'Sent';
-      newPayment.receiptSent = true;
     }
 
     return newPayment;
@@ -1588,71 +1565,114 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     await clearAllGymFirestoreData();
   };
 
-  const connectWhatsApp = async (phoneNumber?: string) => {
-    const targetPhone = phoneNumber || whatsAppSession.phoneNumber || '+91 8197299039';
-    const updated = await pairWhatsAppDevice(targetPhone);
-    setWhatsAppSession(updated);
-    safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_SESSION, JSON.stringify(updated));
-    await saveWhatsAppSessionToFirestore(updated);
-    addNotification(
-      'WhatsApp Device Linked',
-      `WhatsApp is now active on ${targetPhone}. Receipts and alerts will be sent automatically.`,
-      'system',
-      'whatsapp'
-    );
-    return true;
+  const connectWhatsApp = async (_phoneNumber?: string) => {
+    try {
+      const res = await initiateWhatsAppConnect();
+      if (res.success) {
+        addNotification(
+          'WhatsApp Connection Initiated',
+          'Connecting to WhatsApp Gateway. Please scan QR code if not already paired.',
+          'whatsapp'
+        );
+        await refreshWhatsAppStatus();
+        return true;
+      }
+      addNotification('WhatsApp Connection Error', res.error || 'Failed to start connection', 'system');
+      return false;
+    } catch (err: any) {
+      addNotification('WhatsApp Connection Error', err?.message, 'system');
+      return false;
+    }
   };
 
   const disconnectWhatsApp = async () => {
-    await disconnectWhatsAppDevice();
-    const updated: WhatsAppSessionData = {
-      ...whatsAppSession,
-      status: 'disconnected',
-      connectedAt: null
-    };
-    setWhatsAppSession(updated);
-    safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_SESSION, JSON.stringify(updated));
-    await saveWhatsAppSessionToFirestore(updated);
-    addNotification(
-      'WhatsApp Device Unlinked',
-      'WhatsApp session disconnected. Scan QR code anytime to reconnect.',
-      'system',
-      'whatsapp'
-    );
+    try {
+      await terminateWhatsAppSession(true);
+      await refreshWhatsAppStatus();
+      addNotification(
+        'WhatsApp Disconnected',
+        'WhatsApp session has been unlinked from this device.',
+        'system'
+      );
+    } catch (err: any) {
+      console.warn('Disconnect notice:', err);
+    }
   };
 
   const updateWhatsAppConfig = (updates: Partial<WhatsAppSessionData>) => {
-    setWhatsAppSession(prev => {
-      const next = { ...prev, ...updates };
-      safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_SESSION, JSON.stringify(next));
-      saveWhatsAppSessionToFirestore(next).catch(() => {});
-      return next;
-    });
+    setWhatsAppSession(prev => ({ ...prev, ...updates }));
   };
 
   const sendWhatsAppMessage = async (
     recipientPhone: string,
     recipientName: string,
     text: string,
-    type: WhatsAppMessageLog['type'] = 'custom'
-  ): Promise<{ success: boolean; error?: string; messageId?: string }> => {
-    const dispatchRes = await dispatchWhatsAppApiMessage(recipientPhone, recipientName, text, type);
-    const isSuccess = dispatchRes.success;
-    const newLog: WhatsAppMessageLog = {
-      id: dispatchRes.messageId || `walog-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      recipientPhone,
-      recipientName,
-      message: text,
-      type,
-      status: isSuccess ? 'delivered' : 'failed',
-      timestamp: new Date().toISOString()
-    };
-    setWhatsAppLogs(prev => {
-      const updated = [newLog, ...prev];
-      safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_LOGS, JSON.stringify(updated.slice(0, 50)));
-      return updated;
-    });
-    return dispatchRes;
+    type: WhatsAppMessageLog['type'] = 'custom',
+    metadata?: { memberId?: string; receiptNo?: string; idempotencyKey?: string }
+  ): Promise<{ success: boolean; error?: string; messageId?: string; status?: string; statusDisplay?: string; isDuplicate?: boolean }> => {
+    try {
+      const res = await dispatchWhatsAppMessage(recipientPhone, text, type, {
+        recipientName,
+        memberId: metadata?.memberId,
+        receiptNo: metadata?.receiptNo,
+        idempotencyKey: metadata?.idempotencyKey
+      });
+      const isSuccess = !!res.success;
+
+      // Status is strictly SENT ("Message accepted by WhatsApp connection"), NEVER DELIVERED!
+      const initialStatus = isSuccess ? (res.status || 'SENT') : 'FAILED';
+      const initialStatusDisplay = res.statusDisplay || (isSuccess ? (res.isDuplicate ? 'Already Sent (Duplicate Prevented)' : 'Accepted by WhatsApp Connection') : 'Transmission Failed');
+
+      const newLog: WhatsAppMessageLog = {
+        id: res.trackingId || res.messageId || `walog-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        recipientPhone: res.recipientPhone || recipientPhone,
+        recipientName,
+        message: text,
+        content: text,
+        type,
+        status: initialStatus,
+        statusDisplay: initialStatusDisplay,
+        timestamp: res.timestamp || new Date().toISOString(),
+        sentAt: isSuccess ? (res.timestamp || new Date().toISOString()) : null,
+        messageId: res.messageId || null,
+        errorMessage: res.error || null,
+        transitions: res.transitions || [
+          { status: 'QUEUED', timestamp: new Date().toISOString(), reason: 'Message queued' },
+          ...(isSuccess ? [{ status: 'SENT', timestamp: new Date().toISOString(), reason: res.isDuplicate ? 'Duplicate send prevented by idempotency lock' : 'Message accepted by WhatsApp connection' }] : [])
+        ],
+        memberId: metadata?.memberId || null,
+        receiptNo: metadata?.receiptNo || null
+      };
+
+      setWhatsAppLogs(prev => {
+        const existingIdx = prev.findIndex(l => l.id === newLog.id || (l.messageId && l.messageId === newLog.messageId));
+        let updated: WhatsAppMessageLog[];
+        if (existingIdx >= 0) {
+          updated = [...prev];
+          updated[existingIdx] = { ...updated[existingIdx], ...newLog };
+        } else {
+          updated = [newLog, ...prev];
+        }
+        safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_LOGS, JSON.stringify(updated.slice(0, 50)));
+        return updated;
+      });
+
+      return {
+        success: isSuccess,
+        error: res.error,
+        messageId: res.messageId,
+        status: initialStatus,
+        statusDisplay: initialStatusDisplay,
+        isDuplicate: res.isDuplicate
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || 'Failed to dispatch WhatsApp message.',
+        status: 'FAILED',
+        statusDisplay: 'Transmission Failed'
+      };
+    }
   };
 
   const clearWhatsAppLogs = () => {
@@ -1774,85 +1794,285 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customDate?: string;
   }) => {
     try {
-      const res = await triggerLiveAutomationsRun(options);
-      if (res.success && res.summary) {
-        if (res.dispatchedLogs && res.dispatchedLogs.length > 0) {
-          setWhatsAppLogs((prev) => {
-            const merged = [...res.dispatchedLogs!, ...prev];
-            const deduped = deduplicateById(merged);
-            safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_LOGS, JSON.stringify(deduped.slice(0, 50)));
-            return deduped;
-          });
-        }
-        const s = res.summary;
-        addNotification(
-          'WhatsApp Automations Executed',
-          `Sent ${s.totalSent} automated WhatsApp messages (${s.renewals7d.sent} 7-day, ${s.renewals3d.sent} 3-day, ${s.renewals1d.sent} 1-day reminders, ${s.birthdays.sent} birthday wishes, ${s.festivals.sent} festival greetings).`,
-          'whatsapp'
-        );
-        return { success: true, summary: res.summary };
-      } else {
-        // Client-side fallback if backend unavailable or dry-run requested
-        const summary = getUpcomingAutomationsSummary(options?.customDate);
-        let sentCount = 0;
-        const candidates = [
-          ...summary.renewals7d.map((r) => ({
-            phone: r.phone,
-            name: r.member.fullName,
-            text: r.message,
-            type: 'expiry_reminder' as const,
-          })),
-          ...summary.renewals3d.map((r) => ({
-            phone: r.phone,
-            name: r.member.fullName,
-            text: r.message,
-            type: 'expiry_reminder' as const,
-          })),
-          ...summary.renewals1d.map((r) => ({
-            phone: r.phone,
-            name: r.member.fullName,
-            text: r.message,
-            type: 'expiry_reminder' as const,
-          })),
-          ...summary.birthdays.map((b) => ({
-            phone: b.phone,
-            name: b.member.fullName,
-            text: b.message,
-            type: 'birthday' as const,
-          })),
-          ...summary.festivals.flatMap((f) =>
-            f.members.map((m) => ({
-              phone: m.whatsapp || m.phone,
-              name: m.fullName,
-              text: f.message.replace(/{MEMBER_NAME}/gi, m.fullName),
-              type: 'announcement' as const,
-            }))
-          ),
-        ];
+      const summary = getUpcomingAutomationsSummary(options?.customDate);
+      const results = {
+        totalCandidates: 0,
+        sentCount: 0,
+        duplicatePreventedCount: 0,
+        failedCount: 0,
+        details: [] as Array<{
+          key: string;
+          memberId: string;
+          phone: string;
+          action: 'sent' | 'duplicate_prevented' | 'failed' | 'dry_run';
+          reason?: string;
+        }>
+      };
 
-        for (const cand of candidates) {
-          if (!options?.dryRun) {
-            await sendWhatsAppMessage(cand.phone, cand.name, cand.text, cand.type);
-            sentCount++;
+      const filterType = options?.type || 'all';
+
+      // 1. Process 7-day reminders with exact key format: {membershipId}:renewal:7
+      if (filterType === 'all' || filterType === 'renewals') {
+        for (const item of summary.renewals7d) {
+          results.totalCandidates++;
+          const membershipId = (item.member as any).membershipId || item.member.id;
+          const key = `${membershipId}:renewal:7`;
+
+          if (options?.dryRun) {
+            results.details.push({ key, memberId: item.member.id, phone: item.phone, action: 'dry_run' });
+            continue;
+          }
+
+          const res = await sendWhatsAppMessage(
+            item.phone,
+            item.member.fullName,
+            item.message,
+            'expiry_reminder',
+            { memberId: item.member.id, idempotencyKey: key }
+          );
+
+          if (res.isDuplicate) {
+            results.duplicatePreventedCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'duplicate_prevented',
+              reason: 'Message already successfully sent in previous execution'
+            });
+          } else if (res.success) {
+            results.sentCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'sent'
+            });
+          } else {
+            results.failedCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'failed',
+              reason: res.error || 'Failed to dispatch'
+            });
           }
         }
 
-        addNotification(
-          'WhatsApp Automations Completed',
-          `Processed ${candidates.length} automated messages (${sentCount} sent).`,
-          'whatsapp'
-        );
-        return {
-          success: true,
-          summary: {
-            totalSent: sentCount,
-            totalCandidates: candidates.length,
-          },
-        };
+        // 2. Process 3-day reminders with exact key format: {membershipId}:renewal:3
+        for (const item of summary.renewals3d) {
+          results.totalCandidates++;
+          const membershipId = (item.member as any).membershipId || item.member.id;
+          const key = `${membershipId}:renewal:3`;
+
+          if (options?.dryRun) {
+            results.details.push({ key, memberId: item.member.id, phone: item.phone, action: 'dry_run' });
+            continue;
+          }
+
+          const res = await sendWhatsAppMessage(
+            item.phone,
+            item.member.fullName,
+            item.message,
+            'expiry_reminder',
+            { memberId: item.member.id, idempotencyKey: key }
+          );
+
+          if (res.isDuplicate) {
+            results.duplicatePreventedCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'duplicate_prevented',
+              reason: 'Message already successfully sent in previous execution'
+            });
+          } else if (res.success) {
+            results.sentCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'sent'
+            });
+          } else {
+            results.failedCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'failed',
+              reason: res.error || 'Failed to dispatch'
+            });
+          }
+        }
+
+        // 3. Process 1-day reminders with exact key format: {membershipId}:renewal:1
+        for (const item of summary.renewals1d) {
+          results.totalCandidates++;
+          const membershipId = (item.member as any).membershipId || item.member.id;
+          const key = `${membershipId}:renewal:1`;
+
+          if (options?.dryRun) {
+            results.details.push({ key, memberId: item.member.id, phone: item.phone, action: 'dry_run' });
+            continue;
+          }
+
+          const res = await sendWhatsAppMessage(
+            item.phone,
+            item.member.fullName,
+            item.message,
+            'expiry_reminder',
+            { memberId: item.member.id, idempotencyKey: key }
+          );
+
+          if (res.isDuplicate) {
+            results.duplicatePreventedCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'duplicate_prevented',
+              reason: 'Message already successfully sent in previous execution'
+            });
+          } else if (res.success) {
+            results.sentCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'sent'
+            });
+          } else {
+            results.failedCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'failed',
+              reason: res.error || 'Failed to dispatch'
+            });
+          }
+        }
       }
+
+      // 4. Process Birthday Wishes
+      if (filterType === 'all' || filterType === 'birthdays') {
+        const currentYear = new Date().getFullYear();
+        for (const item of summary.birthdays) {
+          results.totalCandidates++;
+          const membershipId = (item.member as any).membershipId || item.member.id;
+          const key = `${membershipId}:birthday:${currentYear}`;
+
+          if (options?.dryRun) {
+            results.details.push({ key, memberId: item.member.id, phone: item.phone, action: 'dry_run' });
+            continue;
+          }
+
+          const res = await sendWhatsAppMessage(
+            item.phone,
+            item.member.fullName,
+            item.message,
+            'birthday',
+            { memberId: item.member.id, idempotencyKey: key }
+          );
+
+          if (res.isDuplicate) {
+            results.duplicatePreventedCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'duplicate_prevented',
+              reason: 'Birthday wish already sent for this year'
+            });
+          } else if (res.success) {
+            results.sentCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'sent'
+            });
+          } else {
+            results.failedCount++;
+            results.details.push({
+              key,
+              memberId: item.member.id,
+              phone: item.phone,
+              action: 'failed',
+              reason: res.error || 'Failed to dispatch'
+            });
+          }
+        }
+      }
+
+      // 5. Process Festival Greetings
+      if (filterType === 'all' || filterType === 'festivals') {
+        const currentYear = new Date().getFullYear();
+        for (const festGroup of summary.festivals) {
+          for (const member of festGroup.members) {
+            const phone = member.whatsapp || member.phone;
+            if (!phone) continue;
+            results.totalCandidates++;
+
+            const membershipId = (member as any).membershipId || member.id;
+            const key = `${membershipId}:festival:${festGroup.festival.id}:${currentYear}`;
+
+            if (options?.dryRun) {
+              results.details.push({ key, memberId: member.id, phone, action: 'dry_run' });
+              continue;
+            }
+
+            const res = await sendWhatsAppMessage(
+              phone,
+              member.fullName,
+              festGroup.message,
+              'announcement',
+              { memberId: member.id, idempotencyKey: key }
+            );
+
+            if (res.isDuplicate) {
+              results.duplicatePreventedCount++;
+              results.details.push({
+                key,
+                memberId: member.id,
+                phone,
+                action: 'duplicate_prevented',
+                reason: 'Festival greeting already dispatched for this event'
+              });
+            } else if (res.success) {
+              results.sentCount++;
+              results.details.push({
+                key,
+                memberId: member.id,
+                phone,
+                action: 'sent'
+              });
+            } else {
+              results.failedCount++;
+              results.details.push({
+                key,
+                memberId: member.id,
+                phone,
+                action: 'failed',
+                reason: res.error || 'Failed to dispatch'
+              });
+            }
+          }
+        }
+      }
+
+      return {
+        success: true,
+        summary: results
+      };
     } catch (err: any) {
-      addNotification('Automation Check Failed', err?.message || 'Could not complete automation run', 'system');
-      return { success: false, error: err?.message };
+      return {
+        success: false,
+        error: err?.message || 'Failed to execute WhatsApp automations.'
+      };
     }
   };
 
@@ -1863,16 +2083,15 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     customMessage?: string;
   }) => {
     try {
-      const res = await sendTestAutomationMessage(params);
+      // Accidental double-click protection via client debounce & unique idempotency key
+      const idempotencyKey = `test:${params.testPhone.replace(/\D/g, '')}:${params.templateType}:${Date.now()}`;
+      const res = await dispatchWhatsAppTest(params.testPhone, params.templateType, idempotencyKey);
       if (res.success) {
-        addNotification('Test Message Sent', `Delivered test template to ${params.testPhone} via WhatsApp`, 'whatsapp');
         return { success: true };
       }
-      addNotification('Test Send Failed', res.error || 'Could not send test message', 'system');
-      return { success: false, error: res.error };
+      return { success: false, error: res.error || 'Failed to dispatch test message.' };
     } catch (err: any) {
-      addNotification('Test Error', err?.message, 'system');
-      return { success: false, error: err?.message };
+      return { success: false, error: err?.message || 'Error sending test message.' };
     }
   };
 

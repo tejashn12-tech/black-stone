@@ -365,37 +365,35 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
       <div className={`p-4 sm:p-5 rounded-2xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
         whatsAppSession.status === 'connected'
           ? 'bg-emerald-950/20 border-emerald-500/30'
-          : 'bg-zinc-900/90 border-zinc-800 hover:border-emerald-500/40'
+          : 'bg-zinc-900/90 border-zinc-800'
       }`}>
         <div className="flex items-center gap-3.5">
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
             whatsAppSession.status === 'connected'
-              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-              : 'bg-zinc-800 text-emerald-400 border border-zinc-700'
+              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+              : 'bg-zinc-800 text-zinc-400 border-zinc-700'
           }`}>
             <MessageSquare className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h4 className="text-sm font-black text-white font-display">
-                {whatsAppSession.status === 'connected'
-                  ? `WhatsApp Gateway Active (${whatsAppSession.phoneNumber || '+91 98803 97294'})`
-                  : 'WhatsApp Web Integration (QR Scanning)'}
+                WhatsApp Gateway
               </h4>
-              {whatsAppSession.status === 'connected' ? (
-                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-extrabold flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Linked
-                </span>
-              ) : (
-                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-extrabold flex items-center gap-1">
-                  <QrCode className="w-3 h-3 text-amber-400" /> QR Required
-                </span>
-              )}
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold flex items-center gap-1 border ${
+                whatsAppSession.status === 'connected'
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  : whatsAppSession.status === 'connecting'
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                  : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+              }`}>
+                {whatsAppSession.status === 'connected' ? 'Active' : whatsAppSession.status === 'connecting' ? 'Connecting' : 'Ready'}
+              </span>
             </div>
             <p className="text-xs text-zinc-400 mt-0.5">
               {whatsAppSession.status === 'connected'
-                ? 'Automated payment receipts and renewal alerts are actively syncing with your linked device.'
-                : 'Connect your front desk phone by scanning the QR code to automate receipts, expiry reminders & greetings.'}
+                ? `Baileys multi-device socket operational (${whatsAppSession.phoneNumber || 'Front Desk'}). Automated receipts and expiry reminders active.`
+                : 'Centralized Baileys multi-device gateway ready. Connect your WhatsApp device to automate receipts and expiry alerts.'}
             </p>
           </div>
         </div>
@@ -404,21 +402,12 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           onClick={() => handleNavigate('whatsapp')}
           className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition shrink-0 flex items-center justify-center gap-2 shadow-sm ${
             whatsAppSession.status === 'connected'
-              ? 'bg-zinc-800 hover:bg-zinc-700 text-emerald-300 border border-zinc-700'
-              : 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-emerald-500/20'
+              ? 'bg-emerald-500 hover:bg-emerald-400 text-black'
+              : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700'
           }`}
         >
-          {whatsAppSession.status === 'connected' ? (
-            <>
-              <MessageSquare className="w-3.5 h-3.5" />
-              <span>Manage WhatsApp</span>
-            </>
-          ) : (
-            <>
-              <QrCode className="w-3.5 h-3.5" />
-              <span>Scan QR Code to Connect</span>
-            </>
-          )}
+          <MessageSquare className="w-3.5 h-3.5" />
+          <span>{whatsAppSession.status === 'connected' ? 'Manage Gateway' : 'Connect Gateway'}</span>
         </button>
       </div>
 

@@ -228,8 +228,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       id: 'whatsapp' as AdminTab,
       label: 'WhatsApp Gateway',
       icon: MessageSquare,
-      badge: whatsAppSession.status === 'connected' ? 'Active' : 'QR Scan',
-      badgeColor: whatsAppSession.status === 'connected' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+      badge: whatsAppSession.status === 'connected' ? 'Active' : whatsAppSession.status === 'connecting' ? 'Connecting' : null,
+      badgeColor: whatsAppSession.status === 'connected' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
     },
     {
       id: 'trainers' as AdminTab,

@@ -64,6 +64,12 @@ service cloud.firestore {
       allow write: if true;
     }
 
+    // WhatsApp Idempotency & Concurrency Locks
+    match /whatsappIdempotency/{key} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     // DPDP Consent Records: Anyone can log consent when submitting forms; audit read/write
     match /consentRecords/{consentId} {
       allow read: if true;
@@ -84,6 +90,11 @@ service cloud.firestore {
       allow write: if true;
     }
 
+    // Server-only private auth credentials: deny all client access
+    match /_private_server_auth/{document=**} {
+      allow read, write: if false;
+    }
+
     // Multi-tenant Gyms collection & subcollections
     match /gyms/{gymId} {
       allow read, write: if true;
@@ -92,8 +103,9 @@ service cloud.firestore {
         allow read, write: if true;
       }
 
+      // WhatsApp session credentials strictly prohibited from client access
       match /whatsappSessions/{sessionId} {
-        allow read, write: if true;
+        allow read, write: if false;
       }
 
       match /automations/{automationId} {

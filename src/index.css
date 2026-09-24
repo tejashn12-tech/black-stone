@@ -28,13 +28,20 @@
 
 /* Admin Dashboard Main Workspace Viewport Styling */
 div#root:nth-of-type(1) > div#bsf-admin-master-dashboard:nth-of-type(1) > main:nth-of-type(1),
-#bsf-admin-main-content {
+#bsf-admin-main-content,
+div#root:nth-of-type(1) > div#bsf-admin-master-dashboard:nth-of-type(1) > main#bsf-admin-main-content:nth-of-type(1) {
   position: relative;
   min-height: 100vh;
   width: 100%;
   contain: paint;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
+}
+
+/* Sidebar Navigation Item 6 (WhatsApp Integration Tab Button) */
+div#root:nth-of-type(1) > div#bsf-admin-master-dashboard:nth-of-type(1) > aside:nth-of-type(1) > div:nth-of-type(1) > nav:nth-of-type(1) > button:nth-of-type(6) {
+  position: relative;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 @media print {

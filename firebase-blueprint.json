@@ -136,21 +136,52 @@
     },
     "WhatsAppLog": {
       "title": "WhatsAppLog",
-      "description": "WhatsApp dispatch notification audit log",
+      "description": "WhatsApp dispatch notification audit log with truthful delivery state tracking",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128 },
+        "messageId": { "type": "string", "maxLength": 128 },
         "recipientName": { "type": "string", "maxLength": 100 },
-        "recipientPhone": { "type": "string", "maxLength": 20 },
+        "recipientPhone": { "type": "string", "maxLength": 50 },
         "type": { "type": "string", "maxLength": 50 },
         "templateName": { "type": "string", "maxLength": 100 },
-        "content": { "type": "string", "maxLength": 2000 },
-        "status": { "type": "string", "enum": ["Sent", "Delivered", "Read", "Failed", "Pending"] },
+        "content": { "type": "string", "maxLength": 4000 },
+        "status": { "type": "string", "enum": ["QUEUED", "SENDING", "SENT", "SERVER_ACK", "DELIVERED", "READ", "PLAYED", "FAILED", "Sent", "Delivered", "Read", "Failed", "Pending"] },
+        "statusDisplay": { "type": "string", "maxLength": 100 },
         "sentAt": { "type": "string", "maxLength": 50 },
+        "serverAckAt": { "type": "string", "maxLength": 50 },
+        "deliveredAt": { "type": "string", "maxLength": 50 },
+        "readAt": { "type": "string", "maxLength": 50 },
+        "failedAt": { "type": "string", "maxLength": 50 },
+        "errorMessage": { "type": "string", "maxLength": 500 },
         "receiptNo": { "type": "string", "maxLength": 50 },
-        "memberId": { "type": "string", "maxLength": 128 }
+        "memberId": { "type": "string", "maxLength": 128 },
+        "transitions": { "type": "array" }
       },
-      "required": ["id", "recipientName", "recipientPhone", "type", "content", "status", "sentAt"]
+      "required": ["id", "recipientPhone", "status"]
+    },
+    "WhatsAppIdempotencyRecord": {
+      "title": "WhatsAppIdempotencyRecord",
+      "description": "WhatsApp transactional idempotency key locks preventing duplicate message dispatch across restarts, retries, and concurrent schedulers",
+      "type": "object",
+      "properties": {
+        "idempotencyKey": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["PENDING", "SUCCESS", "FAILED"] },
+        "lockedAt": { "type": "string", "maxLength": 50 },
+        "lockedUntil": { "type": "number" },
+        "completedAt": { "type": "string", "maxLength": 50 },
+        "failedAt": { "type": "string", "maxLength": 50 },
+        "trackingId": { "type": "string", "maxLength": 128 },
+        "messageId": { "type": "string", "maxLength": 128 },
+        "recipientPhone": { "type": "string", "maxLength": 50 },
+        "recipientName": { "type": "string", "maxLength": 100 },
+        "type": { "type": "string", "maxLength": 50 },
+        "attempts": { "type": "number" },
+        "lastError": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "maxLength": 50 },
+        "updatedAt": { "type": "string", "maxLength": 50 }
+      },
+      "required": ["idempotencyKey", "status", "lockedAt", "recipientPhone"]
     },
     "GymSettings": {
       "title": "GymSettings",
@@ -314,6 +345,10 @@
     "/whatsappLogs/{logId}": {
       "schema": "WhatsAppLog",
       "description": "WhatsApp automation dispatch logs"
+    },
+    "/whatsappIdempotency/{key}": {
+      "schema": "WhatsAppIdempotencyRecord",
+      "description": "WhatsApp transactional idempotency locks preventing duplicate message dispatch"
     },
     "/settings/{settingId}": {
       "schema": "GymSettings",

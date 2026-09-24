@@ -25,8 +25,7 @@ import {
   Enquiry,
   GymSettings,
   ConsentRecord,
-  DataSubjectRequest,
-  WhatsAppSessionData
+  DataSubjectRequest
 } from '../types';
 
 // Helper to remove undefined values recursively before Firestore writes
@@ -457,100 +456,6 @@ export async function clearTrainersPlansAndUpiFirestore() {
   ]);
   await fsUpdateSettings({ upiId: '' });
   console.log('Trainers, plans, and UPI details cleared from Firestore.');
-}
-
-// WhatsApp Session Cross-Origin Firestore Persistence
-export async function saveWhatsAppSessionToFirestore(sessionData: WhatsAppSessionData): Promise<void> {
-  if (isFirestoreQuotaExhausted()) return;
-  try {
-    const sessionRef = doc(db, COLLECTIONS.SETTINGS, 'whatsapp_session');
-    await setDoc(sessionRef, cleanForFirestore({
-      ...sessionData,
-      updatedAt: new Date().toISOString()
-    }), { merge: true });
-
-    // Sync to settings/general as well for backwards compatibility and cross-screen visibility
-    const generalSettingsRef = doc(db, COLLECTIONS.SETTINGS, 'general');
-    await setDoc(generalSettingsRef, cleanForFirestore({
-      whatsappConnected: sessionData.status === 'connected',
-      whatsapp: sessionData.phoneNumber || '+91 8197299039',
-      whatsappConnectedAt: sessionData.connectedAt || new Date().toISOString()
-    }), { merge: true });
-
-    // Sync to gyms/bsf-mysuru for backend tenant identification
-    const gymRef = doc(db, 'gyms', 'bsf-mysuru');
-    await setDoc(gymRef, {
-      whatsapp: cleanForFirestore({
-        status: sessionData.status,
-        phoneNumber: sessionData.phoneNumber || '+91 8197299039',
-        connectedAt: sessionData.connectedAt || new Date().toISOString(),
-        lastActivityAt: new Date().toISOString()
-      }),
-      updatedAt: Date.now()
-    }, { merge: true });
-  } catch (error) {
-    if (isQuotaExhaustedError(error)) {
-      triggerQuotaExhaustedMode(error instanceof Error ? error.message : String(error));
-      return;
-    }
-    console.warn('Could not sync WhatsApp session to Firestore:', error);
-  }
-}
-
-export async function getWhatsAppSessionFromFirestore(): Promise<WhatsAppSessionData | null> {
-  try {
-    const sessionRef = doc(db, COLLECTIONS.SETTINGS, 'whatsapp_session');
-    const snap = await getDoc(sessionRef);
-    if (snap.exists()) {
-      const data = snap.data() as WhatsAppSessionData;
-      if (data?.status === 'connected') {
-        return data;
-      }
-    }
-
-    // Fallback: check gyms/bsf-mysuru
-    const gymRef = doc(db, 'gyms', 'bsf-mysuru');
-    const gymSnap = await getDoc(gymRef);
-    if (gymSnap.exists()) {
-      const gData = gymSnap.data();
-      if (gData?.whatsapp && gData.whatsapp.status === 'connected') {
-        return {
-          status: 'connected',
-          phoneNumber: gData.whatsapp.phoneNumber || '+91 8197299039',
-          connectedAt: gData.whatsapp.connectedAt || new Date().toISOString(),
-          deviceInfo: 'WhatsApp Web Multi-Device (Chrome / Android 14)',
-          batteryLevel: 98,
-          autoReceipts: true,
-          autoExpiryReminders: true,
-          autoBirthdayWishes: true,
-          autoAnnouncements: false
-        };
-      }
-    }
-
-    // Fallback: check settings/general
-    const generalRef = doc(db, COLLECTIONS.SETTINGS, 'general');
-    const genSnap = await getDoc(generalRef);
-    if (genSnap.exists()) {
-      const sData = genSnap.data() as GymSettings;
-      if (sData?.whatsappConnected) {
-        return {
-          status: 'connected',
-          phoneNumber: sData.whatsapp || sData.phone || '+91 8197299039',
-          connectedAt: sData.whatsappConnectedAt || new Date().toISOString(),
-          deviceInfo: 'WhatsApp Web Multi-Device (Chrome / Android 14)',
-          batteryLevel: 98,
-          autoReceipts: true,
-          autoExpiryReminders: true,
-          autoBirthdayWishes: true,
-          autoAnnouncements: false
-        };
-      }
-    }
-  } catch (error) {
-    console.warn('Error fetching WhatsApp session from Firestore:', error);
-  }
-  return null;
 }
 
 

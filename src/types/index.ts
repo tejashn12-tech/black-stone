@@ -1,7 +1,33 @@
 export type MembershipStatus = 'active' | 'expiring_soon' | 'expired' | 'payment_due' | 'fully_paid';
 export type PaymentStatus = 'PAID' | 'PARTIALLY PAID' | 'PAYMENT DUE' | 'REFUNDED' | 'VOID';
 export type PaymentMethod = 'UPI' | 'Cash' | 'Card' | 'Bank Transfer' | 'Other';
-export type WhatsAppStatus = 'Sent' | 'Delivered' | 'Read' | 'Failed' | 'Pending';
+export type MessageDeliveryStatus =
+  | 'QUEUED'
+  | 'SENDING'
+  | 'SENT'
+  | 'SERVER_ACK'
+  | 'DELIVERED'
+  | 'READ'
+  | 'PLAYED'
+  | 'FAILED';
+
+export type WhatsAppStatus =
+  | 'Queued'
+  | 'Sending'
+  | 'Sent'
+  | 'Server Ack'
+  | 'Delivered'
+  | 'Read'
+  | 'Played'
+  | 'Failed'
+  | 'Pending';
+
+export interface WhatsAppMessageTransition {
+  status: MessageDeliveryStatus | string;
+  timestamp: string;
+  reason: string;
+  rawStatus?: string | number;
+}
 export type LeadStatus = 'New Lead' | 'Contacted' | 'Follow-up Required' | 'Interested' | 'Not Interested' | 'Converted to Member';
 export type ReferralSource = 'Google' | 'Instagram' | 'Facebook' | 'Friend/Referral' | 'Walk-in' | 'Advertisement' | 'Other';
 export type ExerciseCategory = 
@@ -371,6 +397,8 @@ export type WhatsAppConnectionStatus =
   | 'connecting'
   | 'authenticating'
   | 'connected'
+  | 'reconnecting'
+  | 'logged_out'
   | 'qr_expired'
   | 'error';
 
@@ -527,9 +555,25 @@ export interface WhatsAppMessageLog {
   id: string;
   recipientPhone: string;
   recipientName: string;
-  type: 'receipt' | 'expiry_reminder' | 'birthday' | 'announcement' | 'test' | 'custom';
+  type: 'receipt' | 'expiry_reminder' | 'birthday' | 'announcement' | 'test' | 'custom' | string;
   message: string;
-  status: 'sent' | 'delivered' | 'read' | 'failed';
+  content?: string;
+  status: 'queued' | 'sending' | 'sent' | 'server_ack' | 'delivered' | 'read' | 'played' | 'failed' | 'QUEUED' | 'SENDING' | 'SENT' | 'SERVER_ACK' | 'DELIVERED' | 'READ' | 'PLAYED' | 'FAILED' | string;
+  statusDisplay?: string;
   timestamp: string;
+  messageId?: string | null;
+  sentAt?: string | null;
+  serverAckAt?: string | null;
+  deliveredAt?: string | null;
+  readAt?: string | null;
+  failedAt?: string | null;
+  errorMessage?: string | null;
+  transitions?: WhatsAppMessageTransition[];
+  memberId?: string | null;
+  receiptNo?: string | null;
+  isDuplicate?: boolean;
+  idempotencyKey?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 

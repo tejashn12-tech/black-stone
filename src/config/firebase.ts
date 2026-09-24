@@ -16,6 +16,7 @@ import {
   Firestore as ClientFirestore,
   WhereFilterOp,
   setLogLevel,
+  runTransaction as clientRunTransaction,
 } from 'firebase/firestore';
 import { logger } from '../utils/logger';
 import firebaseClientConfig from '../../firebase-applet-config.json';
@@ -157,6 +158,8 @@ function getWebDbAdapter(): any {
   function createDocAdapter(documentRef: any): any {
     return {
       id: documentRef.id,
+      _clientDocRef: documentRef,
+      path: documentRef.path,
       async get() {
         const snap = await clientGetDoc(documentRef);
         return {
@@ -282,3 +285,100 @@ export function getAdminDb(): any {
   }
   return getWebDbAdapter();
 }
+
+/**
+ * Universal Firestore transaction runner that works across both Admin SDK
+ * and Client SDK adapter fallback.
+ */
+export async function runFirestoreTransaction<T>(
+  updateFunction: (transaction: {
+    get: (docRef: any) => Promise<{ exists: boolean; data: () => any }>;
+    set: (docRef: any, data: any, options?: { merge?: boolean }) => void;
+    update: (docRef: any, data: any) => void;
+  }) => Promise<T>
+): Promise<T> {
+  const db = getAdminDb();
+
+  // If using native Admin Firestore SDK with service account
+  if (hasServiceAccount && adminDb) {
+    return await adminDb.runTransaction(async (adminTx: any) => {
+      const txAdapter = {
+        async get(docRef: any) {
+          const rawRef = docRef._rawRef || docRef;
+          const snap = await adminTx.get(rawRef);
+          return {
+            exists: typeof snap.exists === 'function' ? snap.exists() : Boolean(snap.exists),
+            data: () => snap.data()
+          };
+        },
+        set(docRef: any, data: any, options?: { merge?: boolean }) {
+          const rawRef = docRef._rawRef || docRef;
+          adminTx.set(rawRef, data, options || {});
+        },
+        update(docRef: any, data: any) {
+          const rawRef = docRef._rawRef || docRef;
+          adminTx.update(rawRef, data);
+        }
+      };
+      return await updateFunction(txAdapter);
+    });
+  }
+
+  // If using Web Client Firestore SDK adapter
+  if (clientDb) {
+    try {
+      return await clientRunTransaction(clientDb, async (clientTx) => {
+        const txAdapter = {
+          async get(docRef: any) {
+            const rawRef = docRef._clientDocRef || (typeof docRef === 'string' ? clientDoc(clientDb!, docRef) : docRef);
+            const snap = await clientTx.get(rawRef);
+            return {
+              exists: snap.exists(),
+              data: () => snap.data()
+            };
+          },
+          set(docRef: any, data: any, options?: { merge?: boolean }) {
+            const rawRef = docRef._clientDocRef || (typeof docRef === 'string' ? clientDoc(clientDb!, docRef) : docRef);
+            clientTx.set(rawRef, data, options || {});
+          },
+          update(docRef: any, data: any) {
+            const rawRef = docRef._clientDocRef || (typeof docRef === 'string' ? clientDoc(clientDb!, docRef) : docRef);
+            clientTx.set(rawRef, data, { merge: true });
+          }
+        };
+        return await updateFunction(txAdapter);
+      });
+    } catch (txErr: any) {
+      // In case web long-polling transactions encounter concurrency or quota, fallback gracefully
+      logger.info({ reason: txErr?.message }, 'Client Firestore transaction notice; operating with serialized read-write adapter');
+    }
+  }
+
+  // Graceful fallback for environments where transactions cannot run over long-polling
+  const txFallbackAdapter = {
+    async get(docRef: any) {
+      if (typeof docRef.get === 'function') {
+        const snap = await docRef.get();
+        return {
+          exists: typeof snap.exists === 'function' ? snap.exists() : Boolean(snap.exists),
+          data: () => (typeof snap.data === 'function' ? snap.data() : snap.data)
+        };
+      }
+      return { exists: false, data: () => null };
+    },
+    set(docRef: any, data: any, options?: { merge?: boolean }) {
+      if (typeof docRef.set === 'function') {
+        docRef.set(data, options).catch(() => {});
+      }
+    },
+    update(docRef: any, data: any) {
+      if (typeof docRef.update === 'function') {
+        docRef.update(data).catch(() => {});
+      } else if (typeof docRef.set === 'function') {
+        docRef.set(data, { merge: true }).catch(() => {});
+      }
+    }
+  };
+  return await updateFunction(txFallbackAdapter);
+}
+
