@@ -70,9 +70,23 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
   } = useGym();
 
   const [selectedProfileMemberId, setSelectedProfileMemberId] = useState<string | null>(initialMemberId || null);
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchInput, setSearchInput] = useState<string>('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<MemberStatusTab>('all');
   const [viewDensity, setViewDensity] = useState<'compact' | 'standard'>('compact');
+
+  // Table pagination state to prevent rendering hundreds of heavy rows simultaneously
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const pageSize = 25;
+
+  // 300ms debounce on search input to prevent lagging on every keystroke
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchInput);
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   // Modals state
   const [isAddModalOpen, setIsAddModalOpen] = useState<boolean>(false);
@@ -80,6 +94,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
   const [isRenewModalOpen, setIsRenewModalOpen] = useState<boolean>(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [activeMember, setActiveMember] = useState<Member | null>(null);
+  const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
 
   // Renewal WhatsApp Notification States
   const [renewSendWhatsApp, setRenewSendWhatsApp] = useState<boolean>(true);
@@ -239,8 +254,8 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
         if (!hasDues) return false;
       }
 
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+      if (debouncedSearchQuery.trim()) {
+        const q = debouncedSearchQuery.toLowerCase();
         const matchesName = m.fullName.toLowerCase().includes(q);
         const matchesCode = (m.memberCode || '').toLowerCase().includes(q);
         const matchesPhone = (m.phone || '').includes(q) || (m.whatsapp || '').includes(q);
@@ -283,7 +298,14 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
 
       return compareMembersRecentlyJoined(a, b);
     });
-  }, [members, statusFilter, searchQuery, sortBy]);
+  }, [members, statusFilter, debouncedSearchQuery, sortBy]);
+
+  // Derived paginated slice
+  const totalPages = Math.max(1, Math.ceil(filteredMembers.length / pageSize));
+  const paginatedMembers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredMembers.slice(start, start + pageSize);
+  }, [filteredMembers, currentPage, pageSize]);
 
   // Open Add Modal
   const handleOpenAdd = () => {
@@ -523,31 +545,28 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
       newExpiry.setMonth(newExpiry.getMonth() + pkg.durationMonths);
       const newExpiryStr = newExpiry.toISOString().split('T')[0];
 
+      const targetPhone = activeMember.whatsapp || activeMember.phone || '+91 98803 97294';
+      const cleanDigits = targetPhone.replace(/\D/g, '');
+      const recipientPhone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
+      const fullWhatsAppPhone = `91${recipientPhone10}`;
+
+      const msgToSend = renewCustomMessage.trim() || undefined;
+
       const renewalResult = renewMember(
         activeMember.id,
         pkg.id,
         pkg.durationMonths,
         renewPaidAmount,
         renewPaymentMethod,
-        `Front desk renewal for ${pkg.name}`
+        `Front desk renewal for ${pkg.name}`,
+        {
+          skipWhatsApp: !renewSendWhatsApp,
+          customMessage: msgToSend
+        }
       );
 
-      const targetPhone = activeMember.whatsapp || activeMember.phone || '+91 98803 97294';
-      const cleanDigits = targetPhone.replace(/\D/g, '');
-      const recipientPhone10 = cleanDigits.length >= 10 ? cleanDigits.slice(-10) : cleanDigits;
-      const fullWhatsAppPhone = `91${recipientPhone10}`;
-
-      const msgToSend = renewCustomMessage.trim() || generateRenewalWhatsAppText(activeMember, pkg, renewPaidAmount, renewPaymentMethod, newExpiryStr);
-      const directUrl = `https://wa.me/${fullWhatsAppPhone}?text=${encodeURIComponent(msgToSend)}`;
-
-      if (renewSendWhatsApp) {
-        await sendWhatsAppMessage(
-          targetPhone,
-          activeMember.fullName,
-          msgToSend,
-          'expiry_reminder'
-        );
-      }
+      const previewText = msgToSend || generateRenewalWhatsAppText(activeMember, pkg, renewPaidAmount, renewPaymentMethod, newExpiryStr);
+      const directUrl = `https://wa.me/${fullWhatsAppPhone}?text=${encodeURIComponent(previewText)}`;
 
       setRenewalSuccessNotice({
         memberName: activeMember.fullName,
@@ -555,7 +574,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
         newExpiry: newExpiryStr,
         packageName: pkg.name,
         amount: renewPaidAmount,
-        messageText: msgToSend,
+        messageText: previewText,
         directUrl
       });
 
@@ -738,7 +757,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
           {/* ALL */}
           <button
             type="button"
-            onClick={() => setStatusFilter('all')}
+            onClick={() => { setStatusFilter('all'); setCurrentPage(1); }}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 shrink-0 border ${
               statusFilter === 'all'
                 ? 'bg-orange-400 text-black border-orange-400 shadow-md shadow-orange-400/20 font-black'
@@ -757,7 +776,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
           {/* ACTIVE */}
           <button
             type="button"
-            onClick={() => setStatusFilter('active')}
+            onClick={() => { setStatusFilter('active'); setCurrentPage(1); }}
             title="All 66 active members with valid, unexpired memberships"
             className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 shrink-0 border ${
               statusFilter === 'active'
@@ -778,7 +797,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
           {/* EXPIRING SOON */}
           <button
             type="button"
-            onClick={() => setStatusFilter('expiring_soon')}
+            onClick={() => { setStatusFilter('expiring_soon'); setCurrentPage(1); }}
             title="Members with 7 days or less left to their plan expiry date"
             className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 shrink-0 border ${
               statusFilter === 'expiring_soon'
@@ -799,7 +818,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
           {/* INACTIVE / EXPIRED */}
           <button
             type="button"
-            onClick={() => setStatusFilter('inactive')}
+            onClick={() => { setStatusFilter('inactive'); setCurrentPage(1); }}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 shrink-0 border ${
               statusFilter === 'inactive'
                 ? 'bg-rose-500 text-white border-rose-500 shadow-md shadow-rose-500/20 font-black'
@@ -819,7 +838,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
           {/* PAYMENT DUE */}
           <button
             type="button"
-            onClick={() => setStatusFilter('payment_due')}
+            onClick={() => { setStatusFilter('payment_due'); setCurrentPage(1); }}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs transition flex items-center gap-2 shrink-0 border ${
               statusFilter === 'payment_due'
                 ? 'bg-sky-500 text-black border-sky-500 shadow-md shadow-sky-500/20 font-black'
@@ -844,13 +863,13 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
             <input
               type="text"
               placeholder="Search by member name, ID code (BSF-...), phone number, or package plan..."
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
               className="w-full pl-10 pr-10 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-white text-xs placeholder:text-zinc-500 focus:border-orange-400 focus:outline-none shadow-inner"
             />
-            {searchQuery && (
+            {searchInput && (
               <button
-                onClick={() => setSearchQuery('')}
+                onClick={() => { setSearchInput(''); setDebouncedSearchQuery(''); setCurrentPage(1); }}
                 className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white p-1 rounded"
                 title="Clear search"
               >
@@ -867,7 +886,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
               <select
                 id="bsf-member-sort-select"
                 value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
+                onChange={(e) => { setSortBy(e.target.value as any); setCurrentPage(1); }}
                 className="bg-transparent text-white text-xs font-bold focus:outline-none cursor-pointer pr-1"
                 title="Sort member directory"
               >
@@ -943,15 +962,17 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
                       </div>
                       <p className="text-sm font-bold text-white">No matching members found</p>
                       <p className="text-xs text-zinc-400">
-                        {searchQuery
-                          ? `No members matched "${searchQuery}" in the ${statusFilter} tab.`
+                        {searchInput
+                          ? `No members matched "${searchInput}" in the ${statusFilter} tab.`
                           : `No members currently classified as ${statusFilter.replace('_', ' ')}.`}
                       </p>
-                      {(statusFilter !== 'all' || searchQuery) && (
+                      {(statusFilter !== 'all' || searchInput) && (
                         <button
                           onClick={() => {
                             setStatusFilter('all');
-                            setSearchQuery('');
+                            setSearchInput('');
+                            setDebouncedSearchQuery('');
+                            setCurrentPage(1);
                           }}
                           className="px-3 py-1.5 bg-orange-400 text-black font-bold text-xs rounded-xl hover:bg-orange-300 transition"
                         >
@@ -962,7 +983,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
                   </td>
                 </tr>
               ) : (
-                filteredMembers.map(m => {
+                paginatedMembers.map(m => {
                   const effectiveStatus = getEffectiveMemberStatus(m);
                   const daysLeft = getDaysUntilExpiry(m.expiryDate);
                   const hasDues = (m.pendingAmount || 0) > 0;
@@ -1237,7 +1258,7 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
                               handleOpenWhatsAppModal(m);
                             }}
                             className="p-1.5 text-emerald-400 hover:text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-500/40 hover:border-emerald-400 rounded-lg transition-all shadow-sm hover:shadow-emerald-500/20 active:scale-95 flex items-center justify-center gap-1 group/wa"
-                            title="WhatsApp Integration: Send Renewal, Birthday, Due Alert or Custom Message"
+                            title="Send WhatsApp Message via Gateway (Renewal, Birthday, Due Alert or Custom)"
                           >
                             <MessageSquare className="w-3.5 h-3.5 group-hover/wa:scale-110 transition-transform" />
                           </a>
@@ -1256,16 +1277,15 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
 
                           {/* Delete */}
                           <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              if (confirm(`Are you sure you want to delete member ${m.fullName}?`)) {
-                                deleteMember(m.id);
-                              }
+                              setMemberToDelete(m);
                             }}
-                            className="p-1.5 text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
-                            title="Delete Member"
+                            className="p-1.5 text-rose-400 hover:text-rose-200 bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/40 hover:border-rose-400 rounded-lg transition-all shadow-sm hover:shadow-rose-500/20 active:scale-95 flex items-center justify-center group/del"
+                            title="Delete Member & All Related Records (Payments, Receipts, Consents & Logs)"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Trash2 className="w-3.5 h-3.5 group-hover/del:scale-110 transition-transform" />
                           </button>
                         </div>
                       </td>
@@ -1276,6 +1296,38 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
             </tbody>
           </table>
         </div>
+
+        {/* Member Table Pagination Bar */}
+        {filteredMembers.length > pageSize && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 bg-zinc-950/70 border-t border-zinc-800 text-xs">
+            <div className="text-zinc-400">
+              Showing <span className="font-bold text-white font-mono">{(currentPage - 1) * pageSize + 1}</span> to{' '}
+              <span className="font-bold text-white font-mono">{Math.min(filteredMembers.length, currentPage * pageSize)}</span> of{' '}
+              <span className="font-bold text-orange-400 font-mono">{filteredMembers.length}</span> members
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-lg font-semibold transition border border-zinc-700 text-xs"
+              >
+                Previous
+              </button>
+              <span className="px-2 text-zinc-400 font-mono text-xs">
+                Page <span className="text-white font-bold">{currentPage}</span> of {totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-lg font-semibold transition border border-zinc-700 text-xs"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Add Member Modal */}
@@ -1866,6 +1918,70 @@ export const MemberManagement: React.FC<MemberManagementProps> = ({ initialMembe
           defaultType={whatsAppDefaultType}
           onClose={() => setWhatsAppModalMember(null)}
         />
+      )}
+
+      {/* Delete Member Confirmation Modal */}
+      {memberToDelete && (
+        <div 
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setMemberToDelete(null)}
+        >
+          <div 
+            className="bg-zinc-900 border border-zinc-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 text-left"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-extrabold text-white text-base truncate">Permanently Delete Member</h3>
+                <p className="text-xs text-zinc-400 truncate">
+                  {memberToDelete.fullName} <span className="font-mono text-orange-400">({memberToDelete.memberCode})</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-rose-950/20 border border-rose-800/30 text-xs text-rose-300 space-y-2">
+              <p className="font-semibold text-rose-200">
+                Are you sure you want to permanently delete this member?
+              </p>
+              <p className="text-zinc-400 text-[11px] leading-relaxed">
+                This will completely remove <strong className="text-white">{memberToDelete.fullName}</strong> and all related records:
+              </p>
+              <ul className="list-disc list-inside text-[11px] text-zinc-400 space-y-0.5 pl-1">
+                <li>All payment transactions and dues records</li>
+                <li>All generated invoices and receipts</li>
+                <li>All DPDP consent and agreement history</li>
+              </ul>
+              <p className="text-rose-400 font-bold text-[11px] pt-1">
+                This action cannot be undone.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setMemberToDelete(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const id = memberToDelete.id;
+                  setMemberToDelete(null);
+                  deleteMember(id);
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 active:scale-95 transition shadow-lg shadow-rose-600/30 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Yes, Delete Member</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

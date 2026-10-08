@@ -12,6 +12,8 @@ import {
   query as clientQuery,
   where as clientWhere,
   limit as clientLimit,
+  orderBy as clientOrderBy,
+  OrderByDirection,
   getDocs as clientGetDocs,
   Firestore as ClientFirestore,
   WhereFilterOp,
@@ -116,10 +118,19 @@ export function initializeFirebaseAdmin(): { app: AdminApp; auth: AdminAuth; db:
 
   if (hasServiceAccount) {
     try {
-      adminDb = getAdminFirestoreInstance(adminApp, firestoreDbId);
-    } catch {
-      adminDb = getAdminFirestoreInstance(adminApp);
+      if (firestoreDbId && firestoreDbId !== '(default)') {
+        adminDb = getAdminFirestoreInstance(adminApp, firestoreDbId);
+      } else {
+        adminDb = getAdminFirestoreInstance(adminApp);
+      }
+      logger.info({ projectId, firestoreDbId }, 'Firebase Admin Firestore initialized with service account credentials');
+    } catch (dbErr: any) {
+      adminDb = null;
+      logger.warn({ error: dbErr?.message }, 'Admin Firestore unavailable; falling back to web adapter');
     }
+  } else {
+    adminDb = null;
+    logger.info({ projectId, firestoreDbId }, 'Service account keys not configured; using Web Firestore Adapter for server database operations');
   }
 
   return { app: adminApp, auth: adminAuth, db: getAdminDb() };
@@ -222,6 +233,9 @@ function getWebDbAdapter(): any {
       where(field: string, op: string, val: any) {
         return buildQuery(clientQuery(currentQuery, clientWhere(field, op as WhereFilterOp, val)));
       },
+      orderBy(field: string, direction?: OrderByDirection) {
+        return buildQuery(clientQuery(currentQuery, clientOrderBy(field, direction || 'asc')));
+      },
       limit(n: number) {
         return buildQuery(clientQuery(currentQuery, clientLimit(n)));
       },
@@ -247,6 +261,9 @@ function getWebDbAdapter(): any {
       },
       where(field: string, op: string, val: any) {
         return buildQuery(clientQuery(colRef, clientWhere(field, op as WhereFilterOp, val)));
+      },
+      orderBy(field: string, direction?: OrderByDirection) {
+        return buildQuery(clientQuery(colRef, clientOrderBy(field, direction || 'asc')));
       },
       limit(n: number) {
         return buildQuery(clientQuery(colRef, clientLimit(n)));
@@ -280,8 +297,14 @@ export function getAdminAuth(): AdminAuth {
 }
 
 export function getAdminDb(): any {
-  if (hasServiceAccount && adminDb) {
+  if (adminDb) {
     return adminDb;
+  }
+  if (!adminApp) {
+    try {
+      initializeFirebaseAdmin();
+      if (adminDb) return adminDb;
+    } catch {}
   }
   return getWebDbAdapter();
 }
@@ -299,8 +322,8 @@ export async function runFirestoreTransaction<T>(
 ): Promise<T> {
   const db = getAdminDb();
 
-  // If using native Admin Firestore SDK with service account
-  if (hasServiceAccount && adminDb) {
+  // If using native Admin Firestore SDK with service account or ADC
+  if (adminDb) {
     return await adminDb.runTransaction(async (adminTx: any) => {
       const txAdapter = {
         async get(docRef: any) {

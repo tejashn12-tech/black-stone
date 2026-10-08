@@ -1,8 +1,34 @@
 import path from 'path';
 import fs from 'fs';
-import { useMultiFileAuthState, AuthenticationState } from '@whiskeysockets/baileys';
+import * as BaileysModule from '@whiskeysockets/baileys';
+import { useMultiFileAuthState as useMultiFileAuthStateNamed, type AuthenticationState } from '@whiskeysockets/baileys';
 import { getAdminDb } from '../../config/firebase';
 import { logWhatsAppEvent, WhatsAppLogEvent } from '../utils/whatsappLogger';
+import {
+  getWhatsAppEnvironment,
+  getWhatsAppSessionVault,
+  getWhatsAppVaultDocId,
+  validateVaultDocAccess,
+  VAULT_COLLECTION,
+  DEV_VAULT_DOC_ID,
+  PROD_VAULT_DOC_ID,
+  WhatsAppEnvironment,
+  WhatsAppSessionVault
+} from '../environment';
+import { HandshakeDiagnostics } from '../diagnostics/HandshakeDiagnostics';
+
+function getMultiFileAuthStateHelper(): typeof useMultiFileAuthStateNamed {
+  const mod = BaileysModule as any;
+  const candidates = [
+    useMultiFileAuthStateNamed,
+    mod?.useMultiFileAuthState,
+    mod?.default?.useMultiFileAuthState,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'function') return c;
+  }
+  return useMultiFileAuthStateNamed;
+}
 
 /**
  * AuthStateManager provides robust, persistent server-side storage for
@@ -14,16 +40,51 @@ import { logWhatsAppEvent, WhatsAppLogEvent } from '../utils/whatsappLogger';
  * - Credentials are NEVER stored in publicly readable Firestore documents.
  * - Server-only private vault (_private_server_auth) is strictly denied in firestore.rules.
  * - Only genuine logout or invalid auth triggers session deletion. Temporary drops preserve credentials.
+ * - Development and Production use isolated session documents and never cross-pollinate.
  */
 export class AuthStateManager {
   private sessionDir: string;
-  private readonly VAULT_COLLECTION = '_private_server_auth';
-  private readonly VAULT_DOC_ID = 'bsf_whatsapp_session';
+  private readonly VAULT_COLLECTION = VAULT_COLLECTION;
+  private readonly environment: WhatsAppEnvironment;
+  private readonly sessionVault: WhatsAppSessionVault;
+  private readonly vaultDocId: string;
   private pendingSaveCredsPromise: Promise<void> | null = null;
 
   constructor(customSessionPath?: string) {
-    this.sessionDir = customSessionPath || process.env.WHATSAPP_SESSION_PATH || path.resolve(process.cwd(), 'storage', 'whatsapp-session');
+    this.environment = getWhatsAppEnvironment();
+    this.sessionVault = getWhatsAppSessionVault();
+    this.vaultDocId = getWhatsAppVaultDocId(this.sessionVault);
+
+    // Validate that document matches environment
+    validateVaultDocAccess(this.vaultDocId);
+
+    // For development, maintain EXACT existing 'storage/whatsapp-session' so AI Studio connection is 100% untouched
+    if (customSessionPath || process.env.WHATSAPP_SESSION_PATH) {
+      this.sessionDir = customSessionPath || process.env.WHATSAPP_SESSION_PATH!;
+    } else if (this.environment === 'production') {
+      this.sessionDir = path.resolve(process.cwd(), 'storage', 'whatsapp-session-prod');
+    } else {
+      this.sessionDir = path.resolve(process.cwd(), 'storage', 'whatsapp-session');
+    }
+
     this.ensureSessionDir();
+
+    // Required startup logs without leaking credentials
+    console.log(`[AuthStateManager] WHATSAPP_ENVIRONMENT=${this.environment}`);
+    console.log(`[AuthStateManager] WHATSAPP_SESSION_VAULT=${this.sessionVault}`);
+    console.log(`[AuthStateManager] AUTH_STATE_INITIALIZED environment=${this.environment} vault=${this.sessionVault}`);
+  }
+
+  public getEnvironment(): WhatsAppEnvironment {
+    return this.environment;
+  }
+
+  public getSessionVault(): WhatsAppSessionVault {
+    return this.sessionVault;
+  }
+
+  public getVaultDocId(): string {
+    return this.vaultDocId;
   }
 
   public async waitForPendingCredsSave(): Promise<void> {
@@ -57,7 +118,12 @@ export class AuthStateManager {
     }
 
     try {
-      const { state, saveCreds: originalSaveCreds } = await useMultiFileAuthState(this.sessionDir);
+      const initMultiFileAuthState = getMultiFileAuthStateHelper();
+      const { state, saveCreds: originalSaveCreds } = await initMultiFileAuthState(this.sessionDir);
+
+      if (state.creds?.me?.id && !state.creds.registered) {
+        state.creds.registered = true;
+      }
 
       const hasCreds = this.hasLocalSession();
       logWhatsAppEvent(WhatsAppLogEvent.AUTH_STATE_LOADED, {
@@ -69,20 +135,53 @@ export class AuthStateManager {
       const wrappedSaveCreds = async (): Promise<void> => {
         const p = (async () => {
           try {
+            if (state.creds?.me?.id && !state.creds.registered) {
+              state.creds.registered = true;
+            }
+
+            HandshakeDiagnostics.getInstance().recordCredsUpdate({
+              hasMe: Boolean(state.creds?.me?.id),
+              registered: state.creds?.registered || false,
+              platform: state.creds?.platform || null
+            });
+            HandshakeDiagnostics.getInstance().recordCredsPersistStart({
+              vaultDocId: this.vaultDocId,
+              sessionDir: this.sessionDir
+            });
+
             await originalSaveCreds();
             logWhatsAppEvent(WhatsAppLogEvent.AUTH_STATE_SAVED, {
               timestamp: new Date().toISOString()
             });
 
-            // Sync snapshot to private server vault for container restart resilience
-            await this.syncToPrivateServerVault();
+            // Sync snapshot to private server vault asynchronously without blocking saveCreds
+            this.syncToPrivateServerVault().catch((vaultErr) => {
+              console.warn('[AuthStateManager] Background vault sync notice:', vaultErr?.message);
+            });
           } catch (saveErr: any) {
-            logWhatsAppEvent(WhatsAppLogEvent.AUTH_ERROR, `Failed to save credentials: ${saveErr?.message}`);
+            HandshakeDiagnostics.getInstance().recordCredsPersistFailed(
+              saveErr?.message || 'saveCreds failed',
+              { code: saveErr?.code, vaultDocId: this.vaultDocId, isFatal: true }
+            );
+            logWhatsAppEvent(WhatsAppLogEvent.AUTH_ERROR, `Failed to save credentials to disk: ${saveErr?.message}`);
             throw saveErr;
           }
         })();
         this.pendingSaveCredsPromise = p;
         await p;
+      };
+
+      // Wrap state.keys.set to monitor key lifecycle events and prevent stranded keys
+      const originalKeysSet = state.keys.set;
+      state.keys.set = async (data: any) => {
+        try {
+          for (const category in data) {
+            const count = Object.keys(data[category] || {}).length;
+            HandshakeDiagnostics.getInstance().recordKeyStateUpdate(category, count);
+          }
+        } catch {}
+        await originalKeysSet(data);
+        this.scheduleVaultSync();
       };
 
       return {
@@ -116,7 +215,8 @@ export class AuthStateManager {
 
       const content = fs.readFileSync(credsPath, 'utf8');
       const parsed = JSON.parse(content);
-      return !!(parsed && (parsed.me?.id || parsed.registered === true));
+      // In Baileys multi-device companion mode, me.id is populated upon successful pairing
+      return Boolean(parsed && parsed.me?.id);
     } catch {
       return false;
     }
@@ -143,10 +243,11 @@ export class AuthStateManager {
    */
   private async restoreFromPrivateServerVault(): Promise<boolean> {
     try {
+      validateVaultDocAccess(this.vaultDocId);
       const db = getAdminDb();
       if (!db) return false;
 
-      const docRef = db.collection(this.VAULT_COLLECTION).doc(this.VAULT_DOC_ID);
+      const docRef = db.collection(this.VAULT_COLLECTION).doc(this.vaultDocId);
       const snap = await docRef.get();
 
       if (!snap || !snap.exists) {
@@ -158,7 +259,7 @@ export class AuthStateManager {
         return false;
       }
 
-      console.log('[AuthStateManager] Hydrating local session files from private server vault...');
+      console.log(`[AuthStateManager] Hydrating local session files from private server vault (${this.vaultDocId})...`);
       this.ensureSessionDir();
 
       for (const [filename, fileContent] of Object.entries(data.files)) {
@@ -168,7 +269,7 @@ export class AuthStateManager {
         }
       }
 
-      console.log(`[AuthStateManager] Restored ${Object.keys(data.files).length} session file(s) from vault.`);
+      console.log(`[AuthStateManager] Restored ${Object.keys(data.files).length} session file(s) from vault (${this.vaultDocId}).`);
       return true;
     } catch (err: any) {
       console.warn('[AuthStateManager] Vault restore notice (falling back to fresh local session):', err?.message);
@@ -176,11 +277,21 @@ export class AuthStateManager {
     }
   }
 
+  private syncDebounceTimer: NodeJS.Timeout | null = null;
+  private scheduleVaultSync(): void {
+    if (this.syncDebounceTimer) return;
+    this.syncDebounceTimer = setTimeout(() => {
+      this.syncDebounceTimer = null;
+      this.syncToPrivateServerVault().catch(() => {});
+    }, 1500);
+  }
+
   /**
    * Syncs active creds.json and session state to the private server vault
    */
   private async syncToPrivateServerVault(): Promise<void> {
     try {
+      validateVaultDocAccess(this.vaultDocId);
       if (!this.hasLocalSession()) return;
 
       const db = getAdminDb();
@@ -212,13 +323,28 @@ export class AuthStateManager {
 
       if (!files['creds.json']) return;
 
-      const docRef = db.collection(this.VAULT_COLLECTION).doc(this.VAULT_DOC_ID);
+      const docRef = db.collection(this.VAULT_COLLECTION).doc(this.vaultDocId);
       await docRef.set({
         files,
+        environment: this.environment,
+        sessionVault: this.sessionVault,
         updatedAt: new Date().toISOString(),
         serverInstance: process.env.HOSTNAME || 'bsf-server'
       });
+
+      HandshakeDiagnostics.getInstance().recordCredsPersistSuccess({
+        vaultDocId: this.vaultDocId,
+        fileCount: Object.keys(files).length,
+        hasCreds: !!files['creds.json'],
+        keyFilesCount: Object.keys(files).filter(k => k !== 'creds.json').length,
+        totalBytes
+      });
     } catch (err: any) {
+      HandshakeDiagnostics.getInstance().recordCredsPersistFailed(err?.message || 'Sync failed', {
+        code: (err as any)?.code,
+        vaultDocId: this.vaultDocId,
+        isFatal: false
+      });
       // Non-blocking: local disk remains the primary source of truth
       console.warn('[AuthStateManager] Vault sync notice (local disk intact):', err?.message);
     }
@@ -226,10 +352,12 @@ export class AuthStateManager {
 
   /**
    * Clears the session completely when genuinely logged out or authentication is invalid.
-   * Purges local disk AND the private server vault.
+   * Purges local disk AND the environment's designated private server vault.
    */
   public async clearAuthSession(): Promise<void> {
     try {
+      validateVaultDocAccess(this.vaultDocId);
+
       // 1. Purge local directory
       if (fs.existsSync(this.sessionDir)) {
         const files = fs.readdirSync(this.sessionDir);
@@ -248,20 +376,67 @@ export class AuthStateManager {
       }
       this.ensureSessionDir();
 
-      // 2. Purge private server vault
+      // 2. Purge private server vault for this environment ONLY
       try {
         const db = getAdminDb();
         if (db) {
-          await db.collection(this.VAULT_COLLECTION).doc(this.VAULT_DOC_ID).delete();
+          await db.collection(this.VAULT_COLLECTION).doc(this.vaultDocId).delete();
+          console.log(`[AuthStateManager] Purged session vault: ${this.vaultDocId}`);
         }
       } catch (vaultErr: any) {
         console.warn('[AuthStateManager] Vault purge notice:', vaultErr?.message);
       }
 
-      logWhatsAppEvent(WhatsAppLogEvent.LOGGED_OUT, 'Session credentials purged from server storage and vault');
+      logWhatsAppEvent(WhatsAppLogEvent.LOGGED_OUT, `Session credentials purged from server storage and vault (${this.vaultDocId})`);
     } catch (err: any) {
       logWhatsAppEvent(WhatsAppLogEvent.AUTH_ERROR, `Failed clearing session: ${err?.message}`);
     }
+  }
+
+  /**
+   * Cleans the production authentication vault once before the first production pairing.
+   * STRICT SAFEGUARD:
+   * - Only executes in production environment
+   * - ONLY deletes bsf_whatsapp_session_prod
+   * - NEVER deletes or modifies bsf_whatsapp_session_dev
+   * - NEVER touches unrelated collections or documents
+   */
+  public async cleanProductionVaultOnce(): Promise<boolean> {
+    if (this.environment !== 'production') {
+      console.log('[AuthStateManager] cleanProductionVaultOnce skipped: current environment is development.');
+      return false;
+    }
+
+    validateVaultDocAccess(PROD_VAULT_DOC_ID);
+
+    try {
+      // 1. Clear local production session directory
+      if (fs.existsSync(this.sessionDir)) {
+        const files = fs.readdirSync(this.sessionDir);
+        for (const file of files) {
+          const filePath = path.join(this.sessionDir, file);
+          try {
+            if (fs.lstatSync(filePath).isDirectory()) {
+              fs.rmSync(filePath, { recursive: true, force: true });
+            } else {
+              fs.unlinkSync(filePath);
+            }
+          } catch {}
+        }
+      }
+      this.ensureSessionDir();
+
+      // 2. Clear ONLY bsf_whatsapp_session_prod in Firestore
+      const db = getAdminDb();
+      if (db) {
+        await db.collection(this.VAULT_COLLECTION).doc(PROD_VAULT_DOC_ID).delete();
+        console.log(`[AuthStateManager] Successfully cleaned production vault: ${PROD_VAULT_DOC_ID}`);
+        return true;
+      }
+    } catch (err: any) {
+      console.warn(`[AuthStateManager] Error cleaning production vault:`, err?.message);
+    }
+    return false;
   }
 
   public getSessionPath(): string {

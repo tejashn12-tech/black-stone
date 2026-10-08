@@ -420,7 +420,7 @@ export const MemberBulkUploadModal: React.FC<MemberBulkUploadModalProps> = ({ is
           bloodGroup: row.bloodGroup,
           address: row.address,
           notes: row.notes || 'Imported via bulk CSV/File ingest'
-        });
+        }, { skipWhatsApp: true });
 
         // 2. Record initial payment receipt if paidAmount > 0
         if (row.paidAmount > 0) {
@@ -440,7 +440,7 @@ export const MemberBulkUploadModal: React.FC<MemberBulkUploadModalProps> = ({ is
             notes: `Bulk File Import Payment for ${row.packageName}`,
             whatsappStatus: 'Pending',
             expiryDate: row.expiryDate
-          });
+          }, { skipAutoReceipt: true });
         }
 
         importedCount++;

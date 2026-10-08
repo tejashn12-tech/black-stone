@@ -41,7 +41,17 @@ export const INITIAL_SETTINGS: GymSettings = {
   reminder7DayTemplate: 'Hello {MEMBER_NAME}, your Black Stone Fitness membership will expire in 7 days on {EXPIRY_DATE}. Renew early to lock in your legacy rate & zero admission fees! 💪 - BSF Mysuru',
   reminder3DayTemplate: 'Hi {MEMBER_NAME}, only 3 days left on your BSF membership ({EXPIRY_DATE}). Don\'t break your workout streak! Visit the front desk or renew via UPI. 🏋️‍♂️ - Black Stone Fitness',
   reminder1DayTemplate: 'FINAL REMINDER: Hi {MEMBER_NAME}, your BSF membership expires tomorrow ({EXPIRY_DATE}). Renew today to keep seamless gym access. ⚡ - Team BSF Mysuru',
-  birthdayTemplate: '🎉 Happy Birthday, {MEMBER_NAME}! 🎂 The entire Black Stone Fitness family wishes you a healthy, strong, and powerhouse year ahead. Keep crushing your goals! 💪🔥 — Team BSF Mysuru'
+  birthdayTemplate: '🎉 Happy Birthday, {MEMBER_NAME}! 🎂 The entire Black Stone Fitness family wishes you a healthy, strong, and powerhouse year ahead. Keep crushing your goals! 💪🔥 — Team BSF Mysuru',
+  enquiryFollowUpHourIST: 9,
+  enableEnquiryFollowUps: true,
+  enquiryDay7Template: `Hi {name}, this is Blackstone Fitness (BSF). 👋\n\nYou had recently enquired about our gym membership. We just wanted to check if you're still interested.\n\nIf you'd like to know about our plans, timings or membership options, feel free to reply to this message.\n\n— Blackstone Fitness`,
+  enquiryDay15Template: `Hi {name}, just following up from Blackstone Fitness regarding your earlier enquiry. 💪\n\nIf you're still planning to join a gym, we'd be happy to help you choose a suitable membership plan.\n\nFeel free to message us if you'd like more details.\n\n— Blackstone Fitness`,
+  enquiryDay30Template: `Hi {name}, this is Blackstone Fitness.\n\nWe're following up regarding your previous gym enquiry. If you're still considering joining, you can contact us anytime and our team will be happy to assist you.\n\nWe'd love to have you train with us. 💪\n\n— Blackstone Fitness`,
+  enquiryDay45Template: `Hi {name}, this is Blackstone Fitness.\n\nThis is our final automatic follow-up regarding your previous enquiry.\n\nIf you're still interested in joining BSF or would like information about our membership plans, feel free to contact us anytime.\n\nThank you for considering Blackstone Fitness. 💪\n\n— Blackstone Fitness`,
+  enableNewMemberWelcome: true,
+  newMemberWelcomeTemplate: `Hi {name}! 👋\n\nWelcome to Blackstone Fitness (BSF)! 💪\n\nYour membership has been successfully registered with us.\n\nWe’re excited to have you as part of the BSF family.\n\nIf you have any questions regarding your membership, timings, or training, feel free to contact us.\n\nSee you at the gym! 🏋️\n\n— Blackstone Fitness`,
+  enableRenewalConfirmation: true,
+  renewalConfirmationTemplate: `Hi {name}! 👋\n\nYour membership at Blackstone Fitness (BSF) has been successfully renewed. 💪\n\nMembership Plan: {plan}\nRenewal Date: {renewalDate}\nNew Expiry Date: {expiryDate}\n\nThank you for continuing your journey with Blackstone Fitness.\n\nKeep training. Keep progressing. 💪🔥\n\n— Blackstone Fitness`
 };
 
 export const INITIAL_PACKAGES: MembershipPackage[] = [

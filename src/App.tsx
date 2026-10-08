@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense, lazy } from 'react';
 import { GymProvider, useGym } from './context/GymContext';
 import { Navbar } from './components/public/Navbar';
 import { HeroSection } from './components/public/HeroSection';
@@ -10,15 +10,18 @@ import { TransformationsSection } from './components/public/TransformationsSecti
 import { ContactLocationSection } from './components/public/ContactLocationSection';
 import { Footer } from './components/public/Footer';
 import { TrialBookingModal } from './components/public/TrialBookingModal';
-import { ExerciseLibrary } from './components/exercises/ExerciseLibrary';
-import { CalculatorsHub } from './components/calculators/CalculatorsHub';
-import { AdminDashboard } from './components/admin/AdminDashboard';
 import { AdminLoginModal } from './components/admin/AdminLoginModal';
 import { PrivacyNoticeModal } from './components/common/PrivacyNoticeModal';
 import { TermsOfServiceModal } from './components/common/TermsOfServiceModal';
 import { DataRightsModal } from './components/common/DataRightsModal';
 import { CookieConsentBanner } from './components/common/CookieConsentBanner';
 import { MembershipPackage } from './types';
+import { Loader2 } from 'lucide-react';
+
+// Lazy load heavy components to drastically reduce initial JS load
+const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
+const ExerciseLibrary = lazy(() => import('./components/exercises/ExerciseLibrary').then(m => ({ default: m.ExerciseLibrary })));
+const CalculatorsHub = lazy(() => import('./components/calculators/CalculatorsHub').then(m => ({ default: m.CalculatorsHub })));
 
 const MainAppContent: React.FC = () => {
   const { isAdminAuthenticated } = useGym();
@@ -74,7 +77,12 @@ const MainAppContent: React.FC = () => {
   // If viewing admin dashboard
   if (mainView === 'admin') {
     return (
-      <>
+      <Suspense fallback={
+        <div className="min-h-screen bg-zinc-950 flex flex-col items-center justify-center gap-3 text-white text-sm font-semibold">
+          <Loader2 className="w-8 h-8 animate-spin text-orange-400" />
+          <span>Opening Blackstone Fitness Desk...</span>
+        </div>
+      }>
         <AdminDashboard
           onBackToPublicSite={() => {
             setMainView('public');
@@ -88,7 +96,7 @@ const MainAppContent: React.FC = () => {
           isOpen={isPrivacyNoticeModalOpen}
           onClose={() => setIsPrivacyNoticeModalOpen(false)}
         />
-      </>
+      </Suspense>
     );
   }
 
@@ -145,13 +153,27 @@ const MainAppContent: React.FC = () => {
 
         {publicSubview === 'exercises' && (
           <div className="pt-24 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
-            <ExerciseLibrary />
+            <Suspense fallback={
+              <div className="p-20 flex flex-col items-center justify-center gap-3 text-zinc-400 text-xs font-semibold">
+                <Loader2 className="w-8 h-8 animate-spin text-orange-400" />
+                <span>Loading 1,000+ Exercise Directory...</span>
+              </div>
+            }>
+              <ExerciseLibrary />
+            </Suspense>
           </div>
         )}
 
         {publicSubview === 'calculators' && (
           <div className="pt-24 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
-            <CalculatorsHub />
+            <Suspense fallback={
+              <div className="p-20 flex flex-col items-center justify-center gap-3 text-zinc-400 text-xs font-semibold">
+                <Loader2 className="w-8 h-8 animate-spin text-orange-400" />
+                <span>Loading Fitness Calculators...</span>
+              </div>
+            }>
+              <CalculatorsHub />
+            </Suspense>
           </div>
         )}
       </main>

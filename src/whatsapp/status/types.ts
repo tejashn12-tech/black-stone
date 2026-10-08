@@ -43,16 +43,23 @@ export interface WhatsAppStatusInfo {
   reconnectAttempt: number;
   recentTransitions?: StateTransitionEvent[];
   updatedAt: string;
+  environment?: 'development' | 'production';
+  sessionVault?: 'dev' | 'prod';
 }
 
 export interface SendMessageOptions {
   to: string;
-  text: string;
-  type?: 'receipt' | 'expiry_reminder' | 'birthday' | 'announcement' | 'custom' | string;
+  text?: string;
+  type?: 'receipt' | 'payment_receipt' | 'expiry_reminder' | 'birthday' | 'announcement' | 'custom' | string;
   recipientName?: string;
   memberId?: string;
   receiptNo?: string;
   idempotencyKey?: string;
+  // Document and attachment support
+  document?: Buffer | Uint8Array;
+  fileName?: string;
+  mimetype?: string;
+  caption?: string;
 }
 
 export type MessageDeliveryStatus =

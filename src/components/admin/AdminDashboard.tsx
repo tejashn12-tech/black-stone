@@ -1,17 +1,51 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { useGym } from '../../context/GymContext';
 import { BSFLogo } from '../common/BSFLogo';
 import { DashboardOverview } from './DashboardOverview';
-import { MemberManagement } from './MemberManagement';
-import { PaymentManagement } from './PaymentManagement';
-import { EnquiryManagement } from './EnquiryManagement';
-import { TrainerManagement } from './TrainerManagement';
-import { PackageManagement } from './PackageManagement';
-import { SettingsPanel } from './SettingsPanel';
-import { DPDPComplianceHub } from './DPDPComplianceHub';
 import { DeskCommandPalette } from './DeskCommandPalette';
-import { WhatsAppIntegrationPanel } from './WhatsAppIntegrationPanel';
 import { getEffectiveMemberStatus } from '../../utils/memberStatus';
+
+// Lazy load heavy admin tabs to dramatically cut initial bundle and speed up initial render
+const MemberManagement = lazy(() => import('./MemberManagement').then(m => ({ default: m.MemberManagement })));
+const PaymentManagement = lazy(() => import('./PaymentManagement').then(m => ({ default: m.PaymentManagement })));
+const EnquiryManagement = lazy(() => import('./EnquiryManagement').then(m => ({ default: m.EnquiryManagement })));
+const TrainerManagement = lazy(() => import('./TrainerManagement').then(m => ({ default: m.TrainerManagement })));
+const PackageManagement = lazy(() => import('./PackageManagement').then(m => ({ default: m.PackageManagement })));
+const SettingsPanel = lazy(() => import('./SettingsPanel').then(m => ({ default: m.SettingsPanel })));
+const DPDPComplianceHub = lazy(() => import('./DPDPComplianceHub').then(m => ({ default: m.DPDPComplianceHub })));
+const WhatsAppIntegrationPanel = lazy(() => import('./WhatsAppIntegrationPanel').then(m => ({ default: m.WhatsAppIntegrationPanel })));
+
+// Isolated live clock component to prevent forcing full AdminDashboard re-renders every 1000ms
+const LiveClock: React.FC = React.memo(() => {
+  const [timeStr, setTimeStr] = useState(() => {
+    try {
+      return new Date().toLocaleTimeString('en-IN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+      });
+    } catch {
+      return 'Live';
+    }
+  });
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTimeStr(
+        new Date().toLocaleTimeString('en-IN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        })
+      );
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return <span className="text-zinc-300 font-semibold">{timeStr}</span>;
+});
 import {
   LayoutDashboard,
   Users,
@@ -119,26 +153,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Global Command Search
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
-
-  // Live Front Desk Clock
-  const [timeString, setTimeString] = useState('');
-
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setTimeString(
-        now.toLocaleTimeString('en-IN', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: true
-        })
-      );
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Global Keyboard Shortcuts for Everyday High Usage:
   // - Ctrl+K / Cmd+K / Slash -> Command Palette
@@ -319,7 +333,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         <div className="pt-4 border-t border-zinc-800/80 space-y-2 font-sans-body">
           <div className="flex items-center justify-between px-2 text-[10px] text-zinc-500 font-mono">
             <span>Server Time</span>
-            <span className="text-zinc-300 font-semibold">{timeString || 'Live'}</span>
+            <LiveClock />
           </div>
 
           <button
@@ -478,45 +492,52 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Dynamic Sub-Component based on active tab */}
-        {activeTab === 'overview' && (
-          <DashboardOverview
-            onNavigate={(tab) => setActiveTab(tab as AdminTab)}
-            onNavigateTab={(tab) => setActiveTab(tab as AdminTab)}
-          />
-        )}
+        {/* Dynamic Sub-Component based on active tab with Suspense code-splitting */}
+        <Suspense fallback={
+          <div className="p-16 flex flex-col items-center justify-center gap-3 text-zinc-400 text-xs font-semibold">
+            <Loader2 className="w-7 h-7 animate-spin text-orange-400" />
+            <span>Loading workspace module...</span>
+          </div>
+        }>
+          {activeTab === 'overview' && (
+            <DashboardOverview
+              onNavigate={(tab) => setActiveTab(tab as AdminTab)}
+              onNavigateTab={(tab) => setActiveTab(tab as AdminTab)}
+            />
+          )}
 
-        {activeTab === 'members' && (
-          <MemberManagement />
-        )}
+          {activeTab === 'members' && (
+            <MemberManagement />
+          )}
 
-        {activeTab === 'payments' && (
-          <PaymentManagement />
-        )}
+          {activeTab === 'payments' && (
+            <PaymentManagement />
+          )}
 
-        {activeTab === 'enquiries' && (
-          <EnquiryManagement />
-        )}
+          {activeTab === 'enquiries' && (
+            <EnquiryManagement />
+          )}
 
-        {activeTab === 'dpdp' && (
-          <DPDPComplianceHub />
-        )}
+          {activeTab === 'dpdp' && (
+            <DPDPComplianceHub />
+          )}
 
-        {activeTab === 'whatsapp' && (
-          <WhatsAppIntegrationPanel />
-        )}
+          {activeTab === 'whatsapp' && (
+            <WhatsAppIntegrationPanel />
+          )}
 
-        {activeTab === 'trainers' && (
-          <TrainerManagement />
-        )}
+          {activeTab === 'trainers' && (
+            <TrainerManagement />
+          )}
 
-        {activeTab === 'packages' && (
-          <PackageManagement />
-        )}
+          {activeTab === 'packages' && (
+            <PackageManagement />
+          )}
 
-        {activeTab === 'settings' && (
-          <SettingsPanel />
-        )}
+          {activeTab === 'settings' && (
+            <SettingsPanel />
+          )}
+        </Suspense>
 
       </main>
 

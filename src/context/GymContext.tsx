@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Member,
   MembershipPackage,
@@ -34,7 +34,10 @@ import {
 import {
   collection,
   doc,
-  onSnapshot
+  onSnapshot,
+  query,
+  limit,
+  orderBy
 } from 'firebase/firestore';
 import {
   db,
@@ -66,6 +69,7 @@ import {
   fsUpdateSettings,
   fsSaveConsentRecord,
   fsUpdateConsentRecord,
+  fsDeleteConsentRecord,
   fsSaveDSR,
   fsUpdateDSR,
   fsDeleteDSR,
@@ -79,7 +83,10 @@ import {
   terminateWhatsAppSession,
   dispatchWhatsAppMessage,
   dispatchWhatsAppTest,
-  fetchWhatsAppMessages
+  fetchWhatsAppMessages,
+  dispatchAdmissionNotification,
+  dispatchRenewalNotification,
+  sendWhatsAppReceipt
 } from '../services/whatsappApiClient';
 import {
   STORAGE_KEYS,
@@ -130,13 +137,27 @@ interface GymContextType {
   syncAllToFirestore: () => Promise<{ success: boolean; count: number; error?: string }>;
 
   // Member CRUD
-  addMember: (memberData: Omit<Member, 'id' | 'memberCode' | 'joinedDate'>) => Member;
+  addMember: (
+    memberData: Omit<Member, 'id' | 'memberCode' | 'joinedDate'>,
+    options?: { skipWhatsApp?: boolean; customTemplate?: string }
+  ) => Member;
   updateMember: (id: string, updates: Partial<Member>) => void;
   deleteMember: (id: string) => void;
-  renewMember: (id: string, packageId: string, durationMonths: number, paymentAmount: number, paymentMethod: PaymentRecord['paymentMethod'], notes?: string) => void;
+  renewMember: (
+    id: string,
+    packageId: string,
+    durationMonths: number,
+    paymentAmount: number,
+    paymentMethod: PaymentRecord['paymentMethod'],
+    notes?: string,
+    options?: { skipWhatsApp?: boolean; customMessage?: string }
+  ) => { member: Member; payment: PaymentRecord; newExpiryDate: string } | undefined;
 
   // Payment CRUD
-  recordPayment: (paymentData: Omit<PaymentRecord, 'id' | 'receiptNo'>) => PaymentRecord;
+  recordPayment: (
+    paymentData: Omit<PaymentRecord, 'id' | 'receiptNo'>,
+    options?: { skipAutoReceipt?: boolean; customMessage?: string }
+  ) => PaymentRecord;
   updatePayment: (id: string, updates: Partial<PaymentRecord>, syncMember?: boolean) => void;
   deletePayment: (id: string, revertMemberDues?: boolean) => void;
   undoPayment: (id: string, reason?: string) => { success: boolean; revertedAmount: number; memberName: string };
@@ -199,13 +220,14 @@ interface GymContextType {
   connectWhatsApp: (phoneNumber?: string) => Promise<boolean>;
   disconnectWhatsApp: () => Promise<void>;
   updateWhatsAppConfig: (updates: Partial<WhatsAppSessionData>) => void;
+  refreshWhatsAppLogs: () => Promise<void>;
   sendWhatsAppMessage: (
     recipientPhone: string,
     recipientName: string,
     text: string,
     type?: WhatsAppMessageLog['type'],
     metadata?: { memberId?: string; receiptNo?: string; idempotencyKey?: string }
-  ) => Promise<{ success: boolean; error?: string; messageId?: string; status?: string; statusDisplay?: string; isDuplicate?: boolean }>;
+  ) => Promise<{ success: boolean; error?: string; messageId?: string; trackingId?: string; status?: string; statusDisplay?: string; isDuplicate?: boolean }>;
   clearWhatsAppLogs: () => void;
   runWhatsAppAutomations: (options?: { force?: boolean; dryRun?: boolean; type?: 'all' | 'renewals' | 'birthdays' | 'festivals'; customDate?: string }) => Promise<{ success: boolean; summary?: any; error?: string }>;
   getUpcomingAutomationsSummary: (customDate?: string) => {
@@ -685,8 +707,9 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         unsubs.push(unsubDSR);
 
-        // 9. Real-time WhatsApp Message Status & Transition Stream
-        const unsubWALogs = onSnapshot(collection(db, 'whatsappLogs'), (snapshot) => {
+        // 9. Real-time WhatsApp Message Status & Transition Stream (Limited to newest 50 to avoid loading thousands)
+        const waLogsQuery = query(collection(db, 'whatsappLogs'), orderBy('createdAt', 'desc'), limit(50));
+        const unsubWALogs = onSnapshot(waLogsQuery, (snapshot) => {
           if (!snapshot.empty) {
             const mappedLogs: WhatsAppMessageLog[] = snapshot.docs.map(doc => {
               const data = doc.data();
@@ -738,51 +761,84 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Local backup caching (safely sanitized & quota-protected)
+  // Local backup caching (debounced & async-scheduled to prevent UI thread lock during typing/modifications)
   useEffect(() => {
-    const sanitized = sanitizeMembersForCache(members);
-    safeLocalStorageSet(STORAGE_KEYS.MEMBERS, JSON.stringify(sanitized));
+    const timer = setTimeout(() => {
+      const sanitized = sanitizeMembersForCache(members);
+      safeLocalStorageSet(STORAGE_KEYS.MEMBERS, JSON.stringify(sanitized));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [members]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.PACKAGES, JSON.stringify(packages));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.PACKAGES, JSON.stringify(packages));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [packages]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.PAYMENTS, JSON.stringify(payments));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.PAYMENTS, JSON.stringify(payments));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [payments]);
 
   useEffect(() => {
-    const sanitized = sanitizeTrainersForCache(trainers);
-    safeLocalStorageSet(STORAGE_KEYS.TRAINERS, JSON.stringify(sanitized));
+    const timer = setTimeout(() => {
+      const sanitized = sanitizeTrainersForCache(trainers);
+      safeLocalStorageSet(STORAGE_KEYS.TRAINERS, JSON.stringify(sanitized));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [trainers]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.ENQUIRIES, JSON.stringify(enquiries));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.ENQUIRIES, JSON.stringify(enquiries));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [enquiries]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.FESTIVALS, JSON.stringify(festivals));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.FESTIVALS, JSON.stringify(festivals));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [festivals]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [notifications]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [settings]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.CONSENT_RECORDS, JSON.stringify(consentRecords));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.CONSENT_RECORDS, JSON.stringify(consentRecords));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [consentRecords]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.DSR_REQUESTS, JSON.stringify(dataSubjectRequests));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.DSR_REQUESTS, JSON.stringify(dataSubjectRequests));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [dataSubjectRequests]);
 
   useEffect(() => {
-    safeLocalStorageSet(STORAGE_KEYS.COOKIE_PREFERENCES, JSON.stringify(cookiePreferences));
+    const timer = setTimeout(() => {
+      safeLocalStorageSet(STORAGE_KEYS.COOKIE_PREFERENCES, JSON.stringify(cookiePreferences));
+    }, 400);
+    return () => clearTimeout(timer);
   }, [cookiePreferences]);
 
   useEffect(() => {
@@ -798,24 +854,45 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [currentMember]);
 
-  // Sync WhatsApp status from backend gateway
-  const refreshWhatsAppStatus = async () => {
+  // Sync WhatsApp status from backend gateway with adaptive polling
+  // Polling ONLY happens while connecting. Once CONNECTED, DISCONNECTED, or ERROR: stop polling!
+  const refreshWhatsAppStatus = async (force = false): Promise<string> => {
     try {
-      const backendStatus = await fetchWhatsAppStatus();
+      const backendStatus = await fetchWhatsAppStatus(force);
+      const mapped = backendStatus.status === 'connected' ? 'connected' : backendStatus.status === 'connecting' ? 'connecting' : 'disconnected';
       setWhatsAppSession(prev => ({
         ...prev,
-        status: backendStatus.status === 'connected' ? 'connected' : backendStatus.status === 'connecting' ? 'connecting' : 'disconnected',
+        status: mapped,
         phoneNumber: backendStatus.phoneNumber || prev.phoneNumber,
         connectedAt: backendStatus.connectedAt || prev.connectedAt,
         deviceInfo: backendStatus.deviceInfo || prev.deviceInfo
       }));
-    } catch {}
+      return mapped;
+    } catch {
+      return 'disconnected';
+    }
   };
 
   useEffect(() => {
-    refreshWhatsAppStatus();
-    const interval = setInterval(refreshWhatsAppStatus, 15000);
-    return () => clearInterval(interval);
+    let pollInterval: NodeJS.Timeout | null = null;
+    refreshWhatsAppStatus().then(status => {
+      // If currently connecting on app boot, poll briefly until state resolves
+      if (status === 'connecting') {
+        let attempts = 0;
+        pollInterval = setInterval(async () => {
+          attempts++;
+          const cur = await refreshWhatsAppStatus(true);
+          if (cur !== 'connecting' || attempts > 15) {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = null;
+          }
+        }, 3000);
+      }
+    });
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
   }, []);
 
   // Auth methods
@@ -857,7 +934,10 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Add Member
-  const addMember = (memberData: Omit<Member, 'id' | 'memberCode' | 'joinedDate'>): Member => {
+  const addMember = (
+    memberData: Omit<Member, 'id' | 'memberCode' | 'joinedDate'>,
+    options?: { skipWhatsApp?: boolean; customTemplate?: string }
+  ): Member => {
     const count = members.length + 101;
     const newCode = `BSF-2026-${count}`;
     const newId = `mem-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -884,6 +964,24 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       'system',
       'members'
     );
+
+    // Trigger automatic New Member WhatsApp Welcome Message
+    // Triggers ONLY when a NEW member is successfully created
+    // Idempotent: exactly ONE message per admission (admissionWhatsAppNotification:{memberId})
+    if (!options?.skipWhatsApp && settings.enableNewMemberWelcome !== false) {
+      const recipientPhone = newMember.whatsapp || newMember.phone;
+      if (recipientPhone && recipientPhone.trim()) {
+        const idempotencyKey = `admissionWhatsAppNotification:${newMember.id}`;
+        dispatchAdmissionNotification(newMember, {
+          customTemplate: options?.customTemplate || settings.newMemberWelcomeTemplate,
+          idempotencyKey
+        }).then(() => {
+          refreshWhatsAppLogs();
+        }).catch((err) => {
+          console.warn('[GymContext] Automatic admission welcome dispatch notice:', err?.message);
+        });
+      }
+    }
 
     return newMember;
   };
@@ -935,9 +1033,70 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteMember = (id: string) => {
+    const targetMember = members.find(m => m.id === id);
+    const memberName = targetMember?.fullName || 'Member';
+    const memberCode = targetMember?.memberCode || '';
+    const rawPhone = targetMember?.whatsapp || targetMember?.phone || '';
+    const phoneDigits = rawPhone.replace(/\D/g, '');
+    const phone10 = phoneDigits.length >= 10 ? phoneDigits.slice(-10) : phoneDigits;
+
+    // 1. Delete and purge all payment records for this member (local state + Firestore)
+    const relatedPayments = payments.filter(p => p.memberId === id);
+    relatedPayments.forEach(p => {
+      fsDeletePayment(p.id);
+    });
+    setPayments(prev => prev.filter(p => p.memberId !== id));
+
+    // 2. Remove member from local state and delete from Firestore
     setMembers(prev => prev.filter(m => m.id !== id));
-    deletePhotoFromIndexedDB(id).catch(() => {});
     fsDeleteMember(id);
+
+    // 3. Clear current logged-in portal member if it matches the deleted member
+    if (currentMember && currentMember.id === id) {
+      setCurrentMember(null);
+    }
+
+    // 4. Remove all DPDP consent records for this member (local state + Firestore)
+    const relatedConsents = consentRecords.filter(c => 
+      c.principalId === id ||
+      (memberCode && c.principalId === memberCode) ||
+      (phone10 && c.principalContact && c.principalContact.replace(/\D/g, '').endsWith(phone10))
+    );
+    relatedConsents.forEach(c => {
+      fsDeleteConsentRecord(c.id);
+    });
+    setConsentRecords(prev => prev.filter(c => !relatedConsents.some(rc => rc.id === c.id)));
+
+    // 5. Remove all Data Subject Requests (DSR) for this member (local state + Firestore)
+    const relatedDSRs = dataSubjectRequests.filter(d => 
+      d.principalIdentifier === memberCode ||
+      d.principalIdentifier === id ||
+      (phone10 && d.principalContact && d.principalContact.replace(/\D/g, '').endsWith(phone10))
+    );
+    relatedDSRs.forEach(d => {
+      fsDeleteDSR(d.id);
+    });
+    setDataSubjectRequests(prev => prev.filter(d => !relatedDSRs.some(rd => rd.id === d.id)));
+
+    // 6. Purge WhatsApp message logs associated with this member
+    setWhatsAppLogs(prev => prev.filter(l => {
+      if (l.memberId === id) return false;
+      if (phone10 && l.recipientPhone && l.recipientPhone.replace(/\D/g, '').endsWith(phone10)) {
+        return false;
+      }
+      return true;
+    }));
+
+    // 7. Delete photo cache from IndexedDB
+    deletePhotoFromIndexedDB(id).catch(() => {});
+
+    // 8. Add audit log notification
+    addNotification(
+      'Member & All Related Data Deleted',
+      `${memberName} (${memberCode || id}) and all related records (payments, receipts, consent records, and message logs) have been permanently deleted.`,
+      'system',
+      'members'
+    );
   };
 
   // Renew Member
@@ -947,11 +1106,12 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     durationMonths: number,
     paymentAmount: number,
     paymentMethod: PaymentRecord['paymentMethod'],
-    notes?: string
-  ) => {
+    notes?: string,
+    options?: { skipWhatsApp?: boolean; customMessage?: string }
+  ): { member: Member; payment: PaymentRecord; newExpiryDate: string } | undefined => {
     const member = members.find(m => m.id === id);
     const selectedPkg = packages.find(p => p.id === packageId);
-    if (!member || !selectedPkg) return;
+    if (!member || !selectedPkg) return undefined;
 
     const currentExpiry = new Date(member.expiryDate);
     const now = new Date();
@@ -979,7 +1139,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     // Record Payment
-    recordPayment({
+    const payment = recordPayment({
       memberId: member.id,
       memberName: member.fullName,
       memberPhone: member.whatsapp || member.phone,
@@ -995,7 +1155,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       notes: notes || `Membership Renewal for ${selectedPkg.name}`,
       whatsappStatus: 'Pending',
       expiryDate: newExpiryStr
-    });
+    }, { skipAutoReceipt: true });
 
     addNotification(
       'Membership Renewed',
@@ -1003,10 +1163,87 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       'system',
       'members'
     );
+
+    // Trigger automatic Membership Renewal WhatsApp confirmation message
+    // Triggers ONLY after renewal and payment operations successfully complete
+    // Idempotent: exactly ONE message per renewal (renewal:{payment.id}:{member.id})
+    if (!options?.skipWhatsApp && settings.enableRenewalConfirmation !== false) {
+      const recipientPhone = member.whatsapp || member.phone;
+      if (recipientPhone && recipientPhone.trim()) {
+        const renewalId = payment.id;
+        const idempotencyKey = `renewal:${renewalId}:${member.id}`;
+        dispatchRenewalNotification(
+          member,
+          {
+            renewalId,
+            planName: selectedPkg.name,
+            renewalDate: todayStr,
+            expiryDate: newExpiryStr,
+            receiptNo: payment.receiptNo,
+            payment,
+            gymSettings: {
+              gymName: settings.gymName,
+              address: settings.address,
+              city: settings.city,
+              state: settings.state,
+              pincode: settings.pincode,
+              phone: settings.phone,
+              email: settings.email,
+              gstNumber: settings.gstNumber,
+              receiptTerms: settings.receiptTerms,
+              receiptCollectorName: settings.receiptCollectorName
+            },
+            renewal: {
+              packageName: selectedPkg.name,
+              startDate: todayStr,
+              expiryDate: newExpiryStr,
+              durationMonths
+            },
+            isPaid: payment.status === 'PAID'
+          },
+          {
+            customTemplate: options?.customMessage || settings.renewalConfirmationTemplate,
+            idempotencyKey,
+            payment,
+            gymSettings: {
+              gymName: settings.gymName,
+              address: settings.address,
+              city: settings.city,
+              state: settings.state,
+              pincode: settings.pincode,
+              phone: settings.phone,
+              email: settings.email,
+              gstNumber: settings.gstNumber,
+              receiptTerms: settings.receiptTerms,
+              receiptCollectorName: settings.receiptCollectorName
+            }
+          }
+        ).then(() => {
+          refreshWhatsAppLogs();
+        }).catch((err) => {
+          console.warn('[GymContext] Automatic renewal WhatsApp dispatch notice:', err?.message);
+        });
+      }
+    }
+
+    return {
+      member: {
+        ...member,
+        packageId: selectedPkg.id,
+        packageName: selectedPkg.name,
+        expiryDate: newExpiryStr,
+        status: newStatus
+      },
+      payment,
+      newExpiryDate: newExpiryStr
+    };
   };
 
   // Payments
-  const recordPayment = (paymentData: Omit<PaymentRecord, 'id' | 'receiptNo'>): PaymentRecord => {
+  const recordPayment = (
+    paymentData: Omit<PaymentRecord, 'id' | 'receiptNo'>,
+    options?: { skipAutoReceipt?: boolean; customMessage?: string }
+  ): PaymentRecord => {
     const randomReceipt = Math.floor(1000 + Math.random() * 9000);
     const receiptNo = `${settings.receiptPrefix}-${randomReceipt}`;
     const newPayment: PaymentRecord = {
@@ -1025,6 +1262,58 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       updateMember(newPayment.memberId, {
         lastFeesPaid: newPayment.amountPaid
       });
+    }
+
+    // Automatically send invoice PDF along with message whenever payment is received
+    if (!options?.skipAutoReceipt && newPayment.amountPaid > 0 && newPayment.memberId) {
+      const targetMember = members.find(m => m.id === newPayment.memberId);
+      const recipientPhone = targetMember?.whatsapp || targetMember?.phone || newPayment.memberPhone;
+
+      if (recipientPhone && recipientPhone.trim()) {
+        const pkg = packages.find(p => p.id === newPayment.packageId);
+        const pkgName = newPayment.packageName || pkg?.name || targetMember?.packageName || 'Gym Membership';
+        const pendingAmount = Number(newPayment.pendingAmount || 0);
+
+        const defaultPaymentMsg = options?.customMessage ||
+          `Hi ${newPayment.memberName}! 👋\n\nYour payment of ₹${Number(newPayment.amountPaid).toLocaleString('en-IN')} has been received and confirmed at Blackstone Fitness (BSF).\n\nReceipt No: ${newPayment.receiptNo}\nPackage: ${pkgName}\nMode of Payment: ${newPayment.paymentMethod}\n${pendingAmount > 0 ? `Remaining Balance: ₹${pendingAmount.toLocaleString('en-IN')}\n` : 'Status: Fully Paid ✅\n'}\nYour official payment invoice is attached below. Thank you for choosing BSF! 💪`;
+
+        sendWhatsAppReceipt({
+          member: {
+            id: newPayment.memberId,
+            fullName: newPayment.memberName,
+            phone: recipientPhone,
+            whatsapp: recipientPhone,
+            memberCode: targetMember?.memberCode || 'BSF-MEMBER'
+          },
+          payment: newPayment,
+          gymSettings: {
+            gymName: settings.gymName,
+            address: settings.address,
+            city: settings.city,
+            state: settings.state,
+            pincode: settings.pincode,
+            phone: settings.phone,
+            email: settings.email,
+            gstNumber: settings.gstNumber,
+            receiptTerms: settings.receiptTerms,
+            receiptCollectorName: settings.receiptCollectorName
+          },
+          renewal: {
+            packageName: pkgName,
+            startDate: newPayment.paymentDate,
+            expiryDate: newPayment.expiryDate || targetMember?.expiryDate || 'N/A'
+          },
+          targetPhone: recipientPhone,
+          customMessage: defaultPaymentMsg
+        }).then((res) => {
+          if (res.success) {
+            updatePayment(newPayment.id, { whatsappStatus: 'Sent', receiptSent: true }, false);
+          }
+          refreshWhatsAppLogs();
+        }).catch(err => {
+          console.warn('[GymContext] Automatic payment invoice dispatch notice:', err?.message);
+        });
+      }
     }
 
     return newPayment;
@@ -1315,8 +1604,8 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications(prev => deduplicateById([newNotif, ...prev]));
   };
 
-  // Live Aggregate Statistics
-  const getStats = () => {
+  // Memoized Live Aggregate Statistics to prevent recalculating across large arrays on every re-render
+  const calculatedStats = useMemo(() => {
     const now = new Date();
     const today = now.toISOString().split('T')[0];
     const currentYear = now.getFullYear();
@@ -1420,7 +1709,9 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       newAdmissionsThisMonth,
       renewalsThisMonth
     };
-  };
+  }, [members, payments]);
+
+  const getStats = useCallback(() => calculatedStats, [calculatedStats]);
 
   // DPDP Operations
   const recordConsent = (data: {
@@ -1603,13 +1894,53 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setWhatsAppSession(prev => ({ ...prev, ...updates }));
   };
 
+  const refreshWhatsAppLogs = useCallback(async (): Promise<void> => {
+    try {
+      const res = await fetchWhatsAppMessages(50);
+      if (res.success && Array.isArray(res.messages) && res.messages.length > 0) {
+        const mapped: WhatsAppMessageLog[] = res.messages.map((m) => ({
+          id: m.id,
+          recipientPhone: m.recipientPhone,
+          recipientName: m.recipientName,
+          message: m.content,
+          content: m.content,
+          type: (m.type || 'custom') as WhatsAppMessageLog['type'],
+          status: m.status,
+          statusDisplay: m.statusDisplay,
+          timestamp: m.createdAt || m.updatedAt || new Date().toISOString(),
+          sentAt: m.sentAt,
+          messageId: m.messageId,
+          errorMessage: m.errorMessage,
+          transitions: m.transitions,
+          memberId: m.memberId,
+          receiptNo: m.receiptNo
+        }));
+        setWhatsAppLogs(mapped);
+        safeLocalStorageSet(STORAGE_KEYS.WHATSAPP_LOGS, JSON.stringify(mapped.slice(0, 50)));
+      }
+    } catch {
+      // non-fatal
+    }
+  }, []);
+
+  // Sync WhatsApp logs periodically and when gateway is connected
+  useEffect(() => {
+    refreshWhatsAppLogs();
+    const interval = setInterval(() => {
+      if (whatsAppSession.status === 'connected') {
+        refreshWhatsAppLogs();
+      }
+    }, 8000);
+    return () => clearInterval(interval);
+  }, [refreshWhatsAppLogs, whatsAppSession.status]);
+
   const sendWhatsAppMessage = async (
     recipientPhone: string,
     recipientName: string,
     text: string,
     type: WhatsAppMessageLog['type'] = 'custom',
     metadata?: { memberId?: string; receiptNo?: string; idempotencyKey?: string }
-  ): Promise<{ success: boolean; error?: string; messageId?: string; status?: string; statusDisplay?: string; isDuplicate?: boolean }> => {
+  ): Promise<{ success: boolean; error?: string; messageId?: string; trackingId?: string; status?: string; statusDisplay?: string; isDuplicate?: boolean }> => {
     try {
       const res = await dispatchWhatsAppMessage(recipientPhone, text, type, {
         recipientName,
@@ -1657,10 +1988,18 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return updated;
       });
 
+      // Poll in quick bursts after dispatch to reflect server ACK and delivery receipts
+      if (isSuccess) {
+        setTimeout(() => refreshWhatsAppLogs(), 1500);
+        setTimeout(() => refreshWhatsAppLogs(), 4000);
+        setTimeout(() => refreshWhatsAppLogs(), 8000);
+      }
+
       return {
         success: isSuccess,
         error: res.error,
         messageId: res.messageId,
+        trackingId: res.trackingId,
         status: initialStatus,
         statusDisplay: initialStatusDisplay,
         isDuplicate: res.isDuplicate
@@ -2205,6 +2544,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         connectWhatsApp,
         disconnectWhatsApp,
         updateWhatsAppConfig,
+        refreshWhatsAppLogs,
         sendWhatsAppMessage,
         clearWhatsAppLogs,
         runWhatsAppAutomations,

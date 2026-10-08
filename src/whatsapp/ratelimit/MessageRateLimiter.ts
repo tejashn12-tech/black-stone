@@ -51,21 +51,23 @@ export class MessageRateLimiter {
   /**
    * Checks whether a message can be dispatched under rate limits and recipient cooldown
    */
-  public checkRateLimit(phone: string): RateLimitResult {
+  public checkRateLimit(phone: string, allowConsecutiveAttachment: boolean = false): RateLimitResult {
     const now = Date.now();
     const cleanPhone = this.sanitizePhone(phone);
 
-    // 1. Check per-recipient cooldown
-    const lastTime = this.lastDispatchByPhone.get(cleanPhone) || 0;
-    const elapsedSinceLast = now - lastTime;
+    // 1. Check per-recipient cooldown (bypassed if sending document/invoice attachment)
+    if (!allowConsecutiveAttachment) {
+      const lastTime = this.lastDispatchByPhone.get(cleanPhone) || 0;
+      const elapsedSinceLast = now - lastTime;
 
-    if (elapsedSinceLast < this.RECIPIENT_COOLDOWN_MS) {
-      const waitSeconds = Math.ceil((this.RECIPIENT_COOLDOWN_MS - elapsedSinceLast) / 1000);
-      return {
-        allowed: false,
-        retryAfterSeconds: waitSeconds,
-        reason: `Recipient cooldown active. Please wait ${waitSeconds}s before sending another message to this phone number.`
-      };
+      if (elapsedSinceLast < this.RECIPIENT_COOLDOWN_MS) {
+        const waitSeconds = Math.ceil((this.RECIPIENT_COOLDOWN_MS - elapsedSinceLast) / 1000);
+        return {
+          allowed: false,
+          retryAfterSeconds: waitSeconds,
+          reason: `Recipient cooldown active. Please wait ${waitSeconds}s before sending another message to this phone number.`
+        };
+      }
     }
 
     // 2. Check global sliding window

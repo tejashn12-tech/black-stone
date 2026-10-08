@@ -1,4 +1,6 @@
-import makeWASocket, {
+import * as BaileysModule from '@whiskeysockets/baileys';
+import makeWASocketDefault, {
+  makeWASocket as makeWASocketNamed,
   WASocket,
   ConnectionState
 } from '@whiskeysockets/baileys';
@@ -13,6 +15,69 @@ import {
   DisconnectCategory
 } from './DisconnectClassifier';
 import { MessageStatusTracker } from '../messaging/MessageStatusTracker';
+import { HandshakeDiagnostics } from '../diagnostics/HandshakeDiagnostics';
+
+export function getDisconnectReasonName(code?: number): string {
+  if (code === undefined) return 'UNKNOWN';
+  switch (code) {
+    case 401:
+      return 'loggedOut (401)';
+    case 403:
+      return 'forbidden (403)';
+    case 408:
+      return 'timedOut / connectionLost (408)';
+    case 409:
+      return 'conflict (409)';
+    case 411:
+      return 'multideviceMismatch (411)';
+    case 428:
+      return 'connectionClosed (428)';
+    case 440:
+      return 'connectionReplaced (440)';
+    case 500:
+      return 'badSession (500)';
+    case 502:
+      return 'badGateway (502)';
+    case 503:
+      return 'unavailableService (503)';
+    case 515:
+      return 'restartRequired (515)';
+    default:
+      return `Custom (${code})`;
+  }
+}
+
+/**
+ * Resolves the real makeWASocket factory function reliably across:
+ * - AI Studio / Vite / tsx development (native ESM)
+ * - Cloud Run production bundled build (esbuild CJS bundle & Node CJS)
+ *
+ * Prevents "TypeError: (0, import_baileys.default) is not a function" caused by
+ * esbuild's __toESM wrapper attaching module.exports to .default when importing Baileys.
+ */
+export function getWASocketFactory(): typeof makeWASocketDefault {
+  const mod = BaileysModule as any;
+  const candidates = [
+    makeWASocketNamed,
+    mod?.makeWASocket,
+    mod?.default?.makeWASocket,
+    typeof makeWASocketDefault === 'function' ? makeWASocketDefault : null,
+    typeof mod?.default === 'function' ? mod.default : null,
+    typeof mod?.default?.default === 'function' ? mod.default.default : null,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'function') {
+      return candidate;
+    }
+  }
+
+  const exportKeys = Object.keys(mod || {}).join(', ');
+  throw new Error(
+    `[Baileys Factory Resolution Error] Unable to resolve makeWASocket function from @whiskeysockets/baileys. ` +
+    `Inspected module exports: keys=[${exportKeys}], defaultType=${typeof mod?.default}`
+  );
+}
 
 /**
  * SocketConnectionManager enforces:
@@ -115,7 +180,15 @@ export class SocketConnectionManager {
       const loggerLevel = (process.env.WHATSAPP_LOG_LEVEL || 'silent') as pino.Level;
       const baileysLogger = pino({ level: loggerLevel });
 
-      const newSocket = makeWASocket({
+      const createWASocket = getWASocketFactory();
+      if (typeof createWASocket !== 'function') {
+        throw new Error(
+          `[Baileys Error] Resolved createWASocket is not a function (actual type: ${typeof createWASocket}). ` +
+          `Failed to create WhatsApp socket.`
+        );
+      }
+
+      const newSocket = createWASocket({
         auth: state,
         logger: baileysLogger,
         printQRInTerminal: false,
@@ -123,10 +196,20 @@ export class SocketConnectionManager {
         connectTimeoutMs: 60000,
         defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
-        syncFullHistory: false
+        markOnlineOnConnect: true,
+        syncFullHistory: false,
+        getMessage: async (key: any) => {
+          const keyId = key?.id;
+          if (!keyId) return undefined;
+          return MessageStatusTracker.getInstance().getMessageContent(keyId);
+        }
       });
 
       this.socket = newSocket;
+      HandshakeDiagnostics.getInstance().recordSocketCreated({
+        browser: ['Blackstone Fitness Mysuru', 'Chrome', '1.0.0'],
+        hasStateCreds: Boolean(state.creds?.me?.id)
+      });
 
       // Handle credential updates
       newSocket.ev.on('creds.update', saveCreds);
@@ -134,6 +217,13 @@ export class SocketConnectionManager {
       // Handle connection updates
       newSocket.ev.on('connection.update', (update: Partial<ConnectionState>) => {
         this.handleConnectionUpdate(update);
+      });
+
+      // Handle initial message frame upserts (server-ack, etc.)
+      newSocket.ev.on('messages.upsert', (data: any) => {
+        MessageStatusTracker.getInstance().handleMessagesUpsert(data).catch((err) => {
+          console.warn('[SocketConnectionManager] messages.upsert handler warning:', err?.message);
+        });
       });
 
       // Handle message delivery status updates from WhatsApp network stream
@@ -164,6 +254,15 @@ export class SocketConnectionManager {
   private async handleConnectionUpdate(update: Partial<ConnectionState>): Promise<void> {
     const { connection, lastDisconnect, qr, isNewLogin, receivedPendingNotifications } = update;
     const currentState = this.statusManager.getState();
+
+    HandshakeDiagnostics.getInstance().recordConnectionUpdate({
+      connection: connection || null,
+      hasQr: !!qr,
+      isNewLogin: isNewLogin || false,
+      isOnline: (update as any).isOnline ?? null,
+      receivedPendingNotifications: receivedPendingNotifications || false,
+      currentState
+    });
 
     // Once CONNECTED, never process or generate QR codes
     if (currentState === 'CONNECTED' && qr) {
@@ -196,6 +295,12 @@ export class SocketConnectionManager {
       (isNewLogin || receivedPendingNotifications || connection === 'connecting')
     ) {
       this.qrManager.clear();
+      HandshakeDiagnostics.getInstance().recordQrScannedActivity({
+        isNewLogin: isNewLogin || false,
+        receivedPendingNotifications: receivedPendingNotifications || false,
+        connection: connection || 'connecting'
+      });
+
       // State Machine: WAITING_FOR_QR → QR_SCANNED → AUTHENTICATING
       this.statusManager.transition('QR_SCANNED', 'QR scan detected from mobile device', {
         hasQr: false,
@@ -242,12 +347,22 @@ export class SocketConnectionManager {
         }
       );
 
+      // Handshake diagnostics
+      HandshakeDiagnostics.getInstance().recordConnectionOpen({
+        phoneNumber: formattedPhone,
+        wasReconnecting,
+        reconnectAttempts: this.reconnectAttempts
+      });
+
       // Log CONNECTION_OPEN
       logWhatsAppEvent(WhatsAppLogEvent.CONNECTION_OPEN, {
         phoneNumber: formattedPhone,
         wasReconnecting,
         reconnectAttempts: this.reconnectAttempts
       });
+
+      // Mark socket as available to WhatsApp network
+      this.socket?.sendPresenceUpdate('available').catch(() => {});
 
       // Log RECONNECT_SUCCESS if recovered from a drop
       if (wasReconnecting) {
@@ -283,7 +398,42 @@ export class SocketConnectionManager {
         this.isServerShutdown
       );
 
-      // Log CONNECTION_CLOSED with classification
+      const err = lastDisconnect?.error as any;
+      const statusCode = (err as any)?.output?.statusCode;
+      const is515 = statusCode === 515 || analysis.isImmediateRestart;
+      const isConflict =
+        statusCode === 440 ||
+        analysis.category === DisconnectCategory.SERVICE_INTERRUPTION ||
+        analysis.errorName === 'StreamConflict';
+      const isLoggedOut =
+        statusCode === 401 ||
+        analysis.category === DisconnectCategory.EXPLICIT_LOGOUT ||
+        analysis.category === DisconnectCategory.AUTHENTICATION_FAILURE;
+      const errorName = is515
+        ? 'RestartRequired'
+        : isConflict
+        ? 'StreamConflict'
+        : isLoggedOut
+        ? 'LoggedOut'
+        : (err?.name || (err?.constructor ? err.constructor.name : 'UnknownError'));
+      const errorMessage = is515 || isConflict || isLoggedOut ? '' : (analysis.errorMessage || err?.message || 'Connection closed unexpectedly');
+      const sanitizedStack = is515 || isConflict || isLoggedOut ? null : (err?.stack ? err.stack.split('\n').slice(0, 5).join('\n') : null);
+      const reasonCodeName = getDisconnectReasonName(statusCode);
+
+      HandshakeDiagnostics.getInstance().recordConnectionClosed({
+        timestamp: new Date().toISOString(),
+        statusCode: statusCode !== undefined ? statusCode : null,
+        disconnectReasonCode: reasonCodeName,
+        errorName,
+        errorMessage,
+        sanitizedStack,
+        isNewLogin,
+        isOnline: (update as any).isOnline,
+        receivedPendingNotifications,
+        rawErrorType: typeof err
+      });
+
+      // Log CONNECTION_CLOSED or LOGGED_OUT with classification
       const closeLogPayload: Record<string, any> = {
         category: analysis.category,
         reason: analysis.humanReason
@@ -299,12 +449,16 @@ export class SocketConnectionManager {
         !analysis.isImmediateRestart &&
         analysis.category !== DisconnectCategory.MANUAL_DISCONNECT &&
         analysis.category !== DisconnectCategory.SERVER_RESTART &&
-        analysis.category !== DisconnectCategory.EXPLICIT_LOGOUT
+        analysis.category !== DisconnectCategory.EXPLICIT_LOGOUT &&
+        analysis.category !== DisconnectCategory.AUTHENTICATION_FAILURE &&
+        statusCode !== 401
       ) {
         closeLogPayload.error = analysis.errorMessage;
       }
 
-      logWhatsAppEvent(WhatsAppLogEvent.CONNECTION_CLOSED, closeLogPayload);
+      if (!isLoggedOut) {
+        logWhatsAppEvent(WhatsAppLogEvent.CONNECTION_CLOSED, closeLogPayload);
+      }
 
       this.statusManager.setLastDisconnect(new Date().toISOString(), analysis.humanReason);
 
@@ -316,17 +470,23 @@ export class SocketConnectionManager {
           reason: analysis.humanReason
         });
 
-        logWhatsAppEvent(WhatsAppLogEvent.AUTH_ERROR, `Authentication invalidated (${analysis.statusCode || 'unlinked'}): ${analysis.humanReason}`);
-
-        console.warn(`[SocketConnectionManager] ${analysis.category}: Purging auth state files. (${analysis.humanReason})`);
-        await this.authStateManager.clearAuthSession();
         this.destroyCurrentSocket();
         this.reconnectAttempts = 0;
         this.isReconnecting = false;
         this.clearReconnectTimer();
 
+        // Properly purge invalidated credentials from local storage and vault
+        try {
+          await this.authStateManager.clearAuthSession();
+        } catch (clearErr: any) {
+          console.warn('[SocketConnectionManager] Purge session notice:', clearErr?.message);
+        }
+        this.qrManager.clear();
+
         this.statusManager.transition('LOGGED_OUT', analysis.humanReason, {
-          lastError: 'Session terminated. Admin must scan QR code to reconnect.'
+          lastError: `Authentication session invalidated (${reasonCodeName}). Please scan the new QR code to reconnect.`,
+          hasQr: false,
+          qrExpiresAt: null
         });
         return;
       }
@@ -375,6 +535,13 @@ export class SocketConnectionManager {
           baseMs = 1500;
           jitterMs = 0;
           console.log('[SocketConnectionManager] Baileys 515 restartRequired detected. Triggering clean stream restart in 1500ms...');
+        } else if (isConflict) {
+          // Status code 440 (connectionReplaced / Stream conflict):
+          // Another container or session stream is active or settling. Back off 4-6s with jitter to arbitrate stream safely.
+          baseMs = 4000;
+          jitterMs = Math.floor(Math.random() * 2000);
+          delayMs = baseMs + jitterMs;
+          console.log(`[SocketConnectionManager] Stream conflict (440) detected. Backing off ${delayMs}ms to arbitrate stream cleanly...`);
         } else {
           if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
             this.isReconnecting = false;
@@ -423,6 +590,12 @@ export class SocketConnectionManager {
             lastError: analysis.isImmediateRestart ? null : `Reconnecting: ${analysis.humanReason}`,
             reconnectAttempt: this.reconnectAttempts
           }
+        );
+
+        HandshakeDiagnostics.getInstance().recordReconnectAttempt(
+          this.reconnectAttempts,
+          delayMs,
+          reconnectMessage
         );
 
         // Schedule single reconnect timer
@@ -520,6 +693,7 @@ export class SocketConnectionManager {
         sock.ev.removeAllListeners('creds.update');
         sock.ev.removeAllListeners('messages.update');
         sock.ev.removeAllListeners('message-receipt.update');
+        sock.ev.removeAllListeners('messages.upsert');
         if ((sock as any).ws) {
           try {
             (sock as any).ws.terminate?.();

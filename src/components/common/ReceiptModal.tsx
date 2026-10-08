@@ -1,9 +1,10 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { PaymentRecord } from '../../types';
 import { useGym } from '../../context/GymContext';
 import { BSFLogo } from './BSFLogo';
-import { X, Printer, Download, CheckCircle2, ShieldCheck } from 'lucide-react';
-import jsPDF from 'jspdf';
+import { X, Printer, Download, CheckCircle2, ShieldCheck, Send, Loader2 } from 'lucide-react';
+import { generateReceiptPdfDoc } from '../../utils/receiptPdfGenerator';
+import { sendWhatsAppReceipt } from '../../services/whatsappApiClient';
 
 interface ReceiptModalProps {
   payment: PaymentRecord | null;
@@ -14,12 +15,16 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   payment,
   onClose
 }) => {
-  const { settings, getMemberById } = useGym();
+  const { settings, getMemberById, refreshWhatsAppLogs } = useGym();
   const receiptRef = useRef<HTMLDivElement>(null);
+  const [isSendingWhatsApp, setIsSendingWhatsApp] = useState(false);
+  const [whatsAppNotice, setWhatsAppNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   if (!payment) return null;
 
   const member = getMemberById(payment.memberId);
+  const isPaid = (payment.status || '').toUpperCase() === 'PAID' || Number(payment.pendingAmount || 0) === 0;
+  const canSendWhatsApp = Number(payment.amountPaid || 0) > 0 || isPaid;
 
   const handlePrint = () => {
     window.print();
@@ -27,101 +32,99 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
 
   const handleDownloadPDF = () => {
     try {
-      const doc = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4'
+      const doc = generateReceiptPdfDoc({
+        gymSettings: {
+          gymName: settings.gymName,
+          address: settings.address,
+          city: settings.city,
+          state: settings.state,
+          pincode: settings.pincode,
+          phone: settings.phone,
+          email: settings.email,
+          gstNumber: settings.gstNumber,
+          receiptTerms: settings.receiptTerms,
+          receiptCollectorName: settings.receiptCollectorName
+        },
+        member: {
+          fullName: payment.memberName,
+          phone: payment.memberPhone,
+          whatsapp: payment.memberPhone,
+          memberCode: member?.memberCode || 'BSF-MEMBER'
+        },
+        payment: {
+          id: payment.id,
+          receiptNo: payment.receiptNo,
+          paymentDate: payment.paymentDate,
+          paymentTime: payment.paymentTime,
+          paymentMethod: payment.paymentMethod,
+          status: payment.status,
+          totalPackageAmount: payment.totalPackageAmount,
+          amountPaid: payment.amountPaid,
+          pendingAmount: payment.pendingAmount,
+          discount: payment.discount,
+          notes: payment.notes,
+          staffName: payment.staffName || settings.receiptCollectorName
+        },
+        renewal: {
+          packageName: payment.packageName,
+          startDate: payment.paymentDate,
+          expiryDate: payment.expiryDate || 'N/A'
+        }
       });
 
-      // Simple PDF generator
-      doc.setFillColor(15, 15, 18);
-      doc.rect(0, 0, 210, 40, 'F');
-
-      doc.setTextColor(251, 191, 36);
-      doc.setFontSize(22);
-      doc.setFont('helvetica', 'bold');
-      doc.text('BLACK STONE FITNESS (BSF)', 14, 18);
-
-      doc.setTextColor(200, 200, 200);
-      doc.setFontSize(9);
-      doc.setFont('helvetica', 'normal');
-      doc.text(`${settings.address}, ${settings.city}, Karnataka - ${settings.pincode}`, 14, 25);
-      doc.text(`Phone: ${settings.phone} | GSTIN: ${settings.gstNumber}`, 14, 31);
-
-      // Receipt Title Box
-      doc.setFillColor(245, 245, 245);
-      doc.rect(14, 48, 182, 14, 'F');
-      doc.setTextColor(20, 20, 20);
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.text('OFFICIAL MEMBERSHIP & PAYMENT RECEIPT', 18, 57);
-      doc.setFontSize(10);
-      doc.text(`RECEIPT #: ${payment.receiptNo}`, 140, 57);
-
-      // Member and Payment Details
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      doc.text(`Date of Issue: ${payment.paymentDate}`, 14, 72);
-      doc.text(`Member Name: ${payment.memberName}`, 14, 80);
-      doc.text(`Member Code: ${member?.memberCode || 'N/A'}`, 14, 88);
-      doc.text(`Phone Number: ${payment.memberPhone}`, 14, 96);
-
-      doc.text(`Payment Mode: ${payment.paymentMethod}`, 120, 72);
-      doc.text(`Status: ${payment.status}`, 120, 80);
-      doc.text(`Txn Ref: ${payment.transactionRef || 'OFFLINE-DESK'}`, 120, 88);
-      doc.text(`Validity Expiry: ${payment.expiryDate}`, 120, 96);
-
-      // Table Header
-      doc.setFillColor(30, 30, 35);
-      doc.rect(14, 108, 182, 10, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Item / Package Description', 18, 115);
-      doc.text('Duration', 110, 115);
-      doc.text('Amount (INR)', 160, 115);
-
-      // Table Row
-      doc.setTextColor(20, 20, 20);
-      doc.setFont('helvetica', 'normal');
-      doc.text(payment.packageName, 18, 128);
-      doc.text(`Active plan`, 110, 128);
-      doc.text(`Rs. ${payment.totalPackageAmount.toLocaleString('en-IN')}`, 160, 128);
-
-      // Totals
-      doc.line(14, 138, 196, 138);
-      doc.text('Total Package Fee:', 120, 146);
-      doc.text(`Rs. ${payment.totalPackageAmount.toLocaleString('en-IN')}`, 165, 146);
-
-      doc.text('Discount Applied:', 120, 153);
-      doc.text(`- Rs. ${payment.discount || 0}`, 165, 153);
-
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(16, 185, 129);
-      doc.text('Amount Received:', 120, 161);
-      doc.text(`Rs. ${payment.amountPaid.toLocaleString('en-IN')}`, 165, 161);
-
-      doc.setTextColor(239, 68, 68);
-      doc.text('Balance Pending:', 120, 169);
-      doc.text(`Rs. ${payment.pendingAmount.toLocaleString('en-IN')}`, 165, 169);
-
-      // Footer Terms
-      doc.setTextColor(100, 100, 100);
-      doc.setFontSize(8);
-      doc.setFont('helvetica', 'normal');
-      doc.text('Terms & Conditions:', 14, 195);
-      doc.text('1. Fees once paid are non-refundable and non-transferable under standard club policies.', 14, 200);
-      doc.text('2. Please display your digital BSF Member Card at the reception desk upon entry.', 14, 205);
-      doc.text('3. For any renewal queries or freeze requests, contact front desk at +91 821 241 8900.', 14, 210);
-
-      // Signature line
-      doc.line(140, 230, 190, 230);
-      doc.text('Authorized Signatory', 148, 235);
-      doc.text('Black Stone Fitness, Mysuru', 143, 240);
-
-      doc.save(`BSF-Receipt-${payment.receiptNo}.pdf`);
+      const cleanMemberName = (payment.memberName || 'Member').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const cleanReceiptNo = (payment.receiptNo || 'REC').replace(/[^a-zA-Z0-9_-]/g, '_');
+      doc.save(`BSF_Receipt_${cleanMemberName}_${cleanReceiptNo}.pdf`);
     } catch (err) {
       console.error('Error generating PDF:', err);
       window.print();
+    }
+  };
+
+  const handleSendWhatsAppReceipt = async () => {
+    if (!canSendWhatsApp) return;
+    setIsSendingWhatsApp(true);
+    setWhatsAppNotice(null);
+
+    try {
+      const res = await sendWhatsAppReceipt({
+        member: {
+          id: payment.memberId,
+          fullName: payment.memberName,
+          phone: payment.memberPhone,
+          whatsapp: payment.memberPhone,
+          memberCode: member?.memberCode || 'BSF-MEMBER'
+        },
+        payment,
+        gymSettings: {
+          gymName: settings.gymName,
+          address: settings.address,
+          city: settings.city,
+          state: settings.state,
+          pincode: settings.pincode,
+          phone: settings.phone,
+          email: settings.email,
+          gstNumber: settings.gstNumber,
+          receiptTerms: settings.receiptTerms,
+          receiptCollectorName: settings.receiptCollectorName
+        },
+        renewal: {
+          packageName: payment.packageName,
+          startDate: payment.paymentDate,
+          expiryDate: payment.expiryDate || 'N/A'
+        }
+      });
+
+      if (res.success) {
+        setWhatsAppNotice({ type: 'success', text: 'PDF receipt sent successfully over WhatsApp!' });
+        refreshWhatsAppLogs();
+      } else {
+        setWhatsAppNotice({ type: 'error', text: res.error || 'Failed to dispatch WhatsApp receipt.' });
+      }
+    } catch (err: any) {
+      setWhatsAppNotice({ type: 'error', text: err?.message || 'Error sending receipt.' });
+    } finally {
+      setIsSendingWhatsApp(false);
     }
   };
 
@@ -139,6 +142,21 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {canSendWhatsApp && (
+              <button
+                onClick={handleSendWhatsAppReceipt}
+                disabled={isSendingWhatsApp}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-600/90 text-white hover:bg-emerald-500 border border-emerald-500/30 transition disabled:opacity-50"
+                title="Send PDF receipt directly to member's WhatsApp"
+              >
+                {isSendingWhatsApp ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Send className="w-3.5 h-3.5" />
+                )}
+                <span>{isSendingWhatsApp ? 'Sending...' : 'Send WhatsApp'}</span>
+              </button>
+            )}
             <button
               onClick={handleDownloadPDF}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-700 transition"
@@ -161,6 +179,17 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
             </button>
           </div>
         </div>
+
+        {whatsAppNotice && (
+          <div className={`no-print px-6 py-2.5 text-xs flex items-center justify-between border-b ${
+            whatsAppNotice.type === 'success'
+              ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/60'
+              : 'bg-rose-950/60 text-rose-300 border-rose-800/60'
+          }`}>
+            <span>{whatsAppNotice.text}</span>
+            <button onClick={() => setWhatsAppNotice(null)} className="opacity-70 hover:opacity-100 text-xs ml-3">✕</button>
+          </div>
+        )}
 
         {/* Printable Receipt Content Area */}
         <div ref={receiptRef} className="p-8 bg-zinc-950 text-zinc-100 font-sans-body" id="printable-receipt-area">

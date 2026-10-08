@@ -253,6 +253,8 @@ export interface PaymentRecord {
   transactionRef?: string;
   expiryDate: string;
   receiptSent?: boolean;
+  paymentTime?: string;
+  staffName?: string;
 }
 
 export interface Trainer {
@@ -292,6 +294,25 @@ export interface Exercise {
   caloriesBurnEstimatePerHour?: number;
 }
 
+export type FollowUpStage = 'DAY_7' | 'DAY_15' | 'DAY_30' | 'DAY_45' | 'DAY_45_COMPLETED';
+export type FollowUpStatus = 'PENDING' | 'DAY_7_SENT' | 'DAY_15_SENT' | 'DAY_30_SENT' | 'DAY_45_SENT' | 'COMPLETED' | 'STOPPED' | 'FAILED';
+export type StageDeliveryStatus = 'PENDING' | 'SENT' | 'FAILED' | 'SKIPPED';
+
+export interface FollowUpStageRecord {
+  scheduledAt: string;
+  sentAt?: string | null;
+  status: StageDeliveryStatus;
+  error?: string;
+  messageId?: string;
+}
+
+export interface FollowUpHistory {
+  day7?: FollowUpStageRecord;
+  day15?: FollowUpStageRecord;
+  day30?: FollowUpStageRecord;
+  day45?: FollowUpStageRecord;
+}
+
 export interface Enquiry {
   id: string;
   enquiryCode: string;
@@ -316,19 +337,29 @@ export interface Enquiry {
   followUpNotes?: string;
   createdAt: string;
   convertedMemberId?: string;
+  // BSF Enquiry Follow-Up Automation fields
+  enquiryCreatedAt?: string;
+  followUpStatus?: FollowUpStatus;
+  followUpStage?: FollowUpStage;
+  nextFollowUpAt?: string | null;
+  followUpStopped?: boolean;
+  followUpCount?: number;
+  lastFollowUpAt?: string | null;
+  followUpHistory?: FollowUpHistory;
 }
 
 export interface WhatsAppLog {
   id: string;
   recipientName: string;
   recipientPhone: string;
-  type: 'payment_receipt' | 'renewal_reminder_7d' | 'renewal_reminder_3d' | 'renewal_reminder_1d' | 'post_expiry' | 'birthday' | 'festival_greeting' | 'custom_broadcast';
+  type: 'payment_receipt' | 'renewal_reminder_7d' | 'renewal_reminder_3d' | 'renewal_reminder_1d' | 'post_expiry' | 'birthday' | 'festival_greeting' | 'custom_broadcast' | 'enquiry_followup_7d' | 'enquiry_followup_15d' | 'enquiry_followup_30d' | 'enquiry_followup_45d' | 'enquiry_manual_message';
   templateName: string;
   content: string;
   status: WhatsAppStatus;
   sentAt: string;
   receiptNo?: string;
   memberId?: string;
+  enquiryId?: string;
   errorMessage?: string;
 }
 
@@ -384,6 +415,18 @@ export interface GymSettings {
   reminder3DayTemplate: string;
   reminder1DayTemplate: string;
   birthdayTemplate: string;
+  enquiryFollowUpHourIST?: number; // Configurable sending hour in Asia/Kolkata (default 9 = 9:00 AM IST)
+  enableEnquiryFollowUps?: boolean; // Toggle for automated enquiry follow-up sequence
+  enquiryDay7Template?: string;
+  enquiryDay15Template?: string;
+  enquiryDay30Template?: string;
+  enquiryDay45Template?: string;
+  enableNewMemberWelcome?: boolean;
+  newMemberWelcomeTemplate?: string;
+  enableRenewalConfirmation?: boolean;
+  renewalConfirmationTemplate?: string;
+  receiptTerms?: string;
+  receiptCollectorName?: string;
   whatsappConnected?: boolean;
   whatsappConnectedAt?: string | null;
 }

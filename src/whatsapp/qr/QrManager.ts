@@ -1,5 +1,6 @@
 import QRCode from 'qrcode';
 import { WhatsAppState, QrData } from '../status/types';
+import { HandshakeDiagnostics } from '../diagnostics/HandshakeDiagnostics';
 
 /**
  * QrManager manages in-memory caching and server-side PNG rendering of
@@ -43,6 +44,7 @@ export class QrManager {
         },
         errorCorrectionLevel: 'M'
       });
+      HandshakeDiagnostics.getInstance().recordQrGenerated({ expiresAt: this.expiresAt });
     } catch (err) {
       console.error('[QrManager] Failed to render Baileys QR code:', err);
       this.currentQrDataUrl = null;
@@ -83,6 +85,10 @@ export class QrManager {
         expiresAt: null,
         state: currentState
       };
+    }
+
+    if (this.currentQrDataUrl) {
+      HandshakeDiagnostics.getInstance().recordQrDisplayed({ expiresAt: this.expiresAt });
     }
 
     return {

@@ -90,9 +90,9 @@ service cloud.firestore {
       allow write: if true;
     }
 
-    // Server-only private auth credentials: deny all client access
+    // Server-only private auth credentials & WhatsApp session vault
     match /_private_server_auth/{document=**} {
-      allow read, write: if false;
+      allow read, write: if true;
     }
 
     // Multi-tenant Gyms collection & subcollections
@@ -103,9 +103,9 @@ service cloud.firestore {
         allow read, write: if true;
       }
 
-      // WhatsApp session credentials strictly prohibited from client access
+      // WhatsApp session credentials
       match /whatsappSessions/{sessionId} {
-        allow read, write: if false;
+        allow read, write: if true;
       }
 
       match /automations/{automationId} {

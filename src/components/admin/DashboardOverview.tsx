@@ -43,7 +43,7 @@ interface DashboardOverviewProps {
   onNavigate?: (tab: string) => void;
 }
 
-export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
+export const DashboardOverview: React.FC<DashboardOverviewProps> = React.memo(({
   onNavigateTab,
   onNavigate
 }) => {
@@ -604,4 +604,4 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
 
     </div>
   );
-};
+});

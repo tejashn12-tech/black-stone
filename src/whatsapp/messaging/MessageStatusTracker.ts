@@ -1,6 +1,12 @@
 import { EventEmitter } from 'events';
-import { proto } from '@whiskeysockets/baileys';
+import * as BaileysModule from '@whiskeysockets/baileys';
+import { proto as BaileysProto } from '@whiskeysockets/baileys';
 import { getAdminDb, isQuotaExhaustedError } from '../../config/firebase';
+
+const proto =
+  (BaileysModule as any)?.proto ||
+  (BaileysModule as any)?.default?.proto ||
+  BaileysProto;
 
 export type MessageDeliveryStatus =
   | 'QUEUED'
@@ -140,7 +146,7 @@ export class MessageStatusTracker extends EventEmitter {
       const db = getAdminDb();
       if (!db) return;
 
-      const snapshot = await db.collection('whatsappLogs').limit(50).get();
+      const snapshot = await db.collection('whatsappLogs').orderBy('createdAt', 'desc').limit(50).get();
       if (snapshot && snapshot.docs && snapshot.docs.length > 0) {
         for (const doc of snapshot.docs) {
           const data = doc.data() as TrackedMessage;
@@ -342,6 +348,52 @@ export class MessageStatusTracker extends EventEmitter {
   }
 
   /**
+   * Handles incoming Baileys messages.upsert events
+   */
+  public async handleMessagesUpsert(upsert: { messages?: any[]; type?: string }): Promise<void> {
+    const messages = upsert?.messages;
+    if (!Array.isArray(messages) || messages.length === 0) return;
+
+    for (const msgInfo of messages) {
+      const keyId = msgInfo?.key?.id;
+      const rawStatus = msgInfo?.status;
+
+      if (!keyId) continue;
+
+      const internalId = this.messagesByBaileysId.get(keyId);
+      if (!internalId) continue;
+
+      const msg = this.messagesByInternalId.get(internalId);
+      if (!msg) continue;
+
+      if (rawStatus !== undefined && rawStatus !== null) {
+        const targetStatus = this.mapBaileysStatus(rawStatus);
+        if (targetStatus) {
+          await this.advanceStatus(
+            msg,
+            targetStatus,
+            `Baileys upsert status: ${proto?.WebMessageInfo?.Status?.[rawStatus] || rawStatus}`,
+            rawStatus
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Retrieves message content for Signal protocol retry re-transmissions
+   */
+  public getMessageContent(keyId: string): any {
+    const internalId = this.messagesByBaileysId.get(keyId);
+    const msg = internalId ? this.messagesByInternalId.get(internalId) : this.messagesByInternalId.get(keyId);
+    if (!msg || !msg.content) return undefined;
+
+    return {
+      conversation: msg.content
+    };
+  }
+
+  /**
    * Handles incoming Baileys messages.update events
    */
   public async handleMessagesUpdate(updates: any[]): Promise<void> {
@@ -386,11 +438,15 @@ export class MessageStatusTracker extends EventEmitter {
       if (!receipt) continue;
 
       // Check read timestamp
-      if (receipt.readTimestamp) {
+      const readTs = receipt.readTimestamp || (receipt as any).readAt;
+      const playedTs = receipt.playedTimestamp;
+      const deliveryTs = receipt.receiptTimestamp || (receipt as any).timestamp || (receipt as any).deliveredAt;
+
+      if (readTs) {
         await this.advanceStatus(msg, 'READ', 'Read receipt confirmed by recipient device (blue ticks)');
-      } else if (receipt.playedTimestamp) {
+      } else if (playedTs) {
         await this.advanceStatus(msg, 'PLAYED', 'Audio/media played by recipient');
-      } else if (receipt.receiptTimestamp) {
+      } else if (deliveryTs) {
         await this.advanceStatus(msg, 'DELIVERED', 'Delivery receipt confirmed by recipient device (double ticks)');
       }
     }
@@ -450,28 +506,30 @@ export class MessageStatusTracker extends EventEmitter {
   }
 
   private mapBaileysStatus(status: number | string): MessageDeliveryStatus | null {
-    switch (status) {
-      case proto.WebMessageInfo.Status.ERROR:
-      case 0:
-        return 'FAILED';
-      case proto.WebMessageInfo.Status.PENDING:
-      case 1:
-        return 'SENDING';
-      case proto.WebMessageInfo.Status.SERVER_ACK:
-      case 2:
-        return 'SERVER_ACK';
-      case proto.WebMessageInfo.Status.DELIVERY_ACK:
-      case 3:
-        return 'DELIVERED';
-      case proto.WebMessageInfo.Status.READ:
-      case 4:
-        return 'READ';
-      case proto.WebMessageInfo.Status.PLAYED:
-      case 5:
-        return 'PLAYED';
-      default:
-        return null;
+    if (status === proto?.WebMessageInfo?.Status?.ERROR || status === 0 || status === 'ERROR') {
+      return 'FAILED';
     }
+    if (status === proto?.WebMessageInfo?.Status?.PENDING || status === 1 || status === 'PENDING') {
+      return 'SENDING';
+    }
+    if (status === proto?.WebMessageInfo?.Status?.SERVER_ACK || status === 2 || status === 'SERVER_ACK') {
+      return 'SERVER_ACK';
+    }
+    if (
+      status === proto?.WebMessageInfo?.Status?.DELIVERY_ACK ||
+      status === 3 ||
+      status === 'DELIVERY_ACK' ||
+      status === 'DELIVERED'
+    ) {
+      return 'DELIVERED';
+    }
+    if (status === proto?.WebMessageInfo?.Status?.READ || status === 4 || status === 'READ') {
+      return 'READ';
+    }
+    if (status === proto?.WebMessageInfo?.Status?.PLAYED || status === 5 || status === 'PLAYED') {
+      return 'PLAYED';
+    }
+    return null;
   }
 
   public getRecentMessages(limit = 50): TrackedMessage[] {

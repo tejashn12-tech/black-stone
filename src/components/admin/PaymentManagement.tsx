@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useGym } from '../../context/GymContext';
 import { PaymentRecord, PaymentMethod, PaymentStatus, Member } from '../../types';
 import { ReceiptModal } from '../common/ReceiptModal';
+import { sendWhatsAppReceipt } from '../../services/whatsappApiClient';
 import {
   CreditCard,
   Search,
@@ -45,7 +46,8 @@ export const PaymentManagement: React.FC = () => {
     updatePayment,
     deletePayment,
     undoPayment,
-    getStats
+    getStats,
+    refreshWhatsAppLogs
   } = useGym();
 
   const stats = getStats();
@@ -54,11 +56,25 @@ export const PaymentManagement: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'all' | 'monthly_ledger' | 'dues'>('all');
 
   // Filter States
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchInput, setSearchInput] = useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [methodFilter, setMethodFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [monthFilter, setMonthFilter] = useState<string>('all');
   const [yearFilter, setYearFilter] = useState<string>('all');
+
+  // Pagination for Payments Table (25 items per page)
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const pageSize = 25;
+
+  // 300ms debounce for search input
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchInput);
+      setCurrentPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   // Modals
   const [isRecordModalOpen, setIsRecordModalOpen] = useState<boolean>(false);
@@ -205,8 +221,8 @@ export const PaymentManagement: React.FC = () => {
         if (parts[0] !== yearFilter) return false;
       }
 
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+      if (debouncedSearch.trim()) {
+        const q = debouncedSearch.toLowerCase();
         const matchesReceipt = p.receiptNo.toLowerCase().includes(q);
         const matchesName = p.memberName.toLowerCase().includes(q);
         const matchesPhone = p.memberPhone.includes(q);
@@ -216,7 +232,14 @@ export const PaymentManagement: React.FC = () => {
       }
       return true;
     });
-  }, [payments, methodFilter, statusFilter, monthFilter, yearFilter, searchQuery]);
+  }, [payments, methodFilter, statusFilter, monthFilter, yearFilter, debouncedSearch]);
+
+  // Derived paginated slice of payments
+  const totalPages = Math.max(1, Math.ceil(filteredPayments.length / pageSize));
+  const paginatedPayments = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredPayments.slice(start, start + pageSize);
+  }, [filteredPayments, currentPage, pageSize]);
 
   // Outstanding Dues List (for Dues tab)
   const outstandingDuesList = useMemo(() => {
@@ -234,8 +257,8 @@ export const PaymentManagement: React.FC = () => {
         if (parts[0] !== yearFilter) return false;
       }
 
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+      if (debouncedSearch.trim()) {
+        const q = debouncedSearch.toLowerCase();
         const matchesReceipt = p.receiptNo.toLowerCase().includes(q);
         const matchesName = p.memberName.toLowerCase().includes(q);
         const matchesPhone = p.memberPhone.includes(q);
@@ -244,7 +267,7 @@ export const PaymentManagement: React.FC = () => {
       }
       return true;
     });
-  }, [payments, monthFilter, yearFilter, searchQuery]);
+  }, [payments, monthFilter, yearFilter, debouncedSearch]);
 
   const totalOutstandingDuesSum = useMemo(() => {
     return payments.reduce((acc, p) => acc + (p.pendingAmount || 0), 0);
@@ -321,13 +344,66 @@ export const PaymentManagement: React.FC = () => {
     const newAmountPaid = settlePaymentTarget.amountPaid + settleAmount;
     const newPending = Math.max(0, settlePaymentTarget.pendingAmount - settleAmount);
     const newStatus: PaymentStatus = newPending === 0 ? 'PAID' : 'PARTIALLY PAID';
+    const updatedNotes = `${settlePaymentTarget.notes || ''} | Settled ₹${settleAmount} on ${new Date().toISOString().split('T')[0]} via ${settleMethod}`.trim();
 
     updatePayment(settlePaymentTarget.id, {
       amountPaid: newAmountPaid,
       pendingAmount: newPending,
       status: newStatus,
-      notes: `${settlePaymentTarget.notes || ''} | Settled ₹${settleAmount} on ${new Date().toISOString().split('T')[0]} via ${settleMethod}`
+      notes: updatedNotes
     });
+
+    // Automatically send settlement invoice PDF along with message to member via WhatsApp
+    const member = members.find(m => m.id === settlePaymentTarget.memberId);
+    const targetPhone = member?.whatsapp || member?.phone || settlePaymentTarget.memberPhone;
+
+    if (targetPhone && targetPhone.trim()) {
+      const updatedPaymentForReceipt: PaymentRecord = {
+        ...settlePaymentTarget,
+        amountPaid: newAmountPaid,
+        pendingAmount: newPending,
+        status: newStatus,
+        paymentMethod: settleMethod,
+        notes: updatedNotes
+      };
+
+      const settleMessage = `Hi ${settlePaymentTarget.memberName}! 👋\n\nYour payment settlement of ₹${Number(settleAmount).toLocaleString('en-IN')} via ${settleMethod} has been received and confirmed at Blackstone Fitness (BSF).\n\nReceipt No: ${settlePaymentTarget.receiptNo}\nTotal Amount Paid: ₹${Number(newAmountPaid).toLocaleString('en-IN')}\n${newPending > 0 ? `Remaining Due: ₹${Number(newPending).toLocaleString('en-IN')}\n` : 'Balance: Fully Settled ✅\n'}\nYour official settlement invoice is attached below. Thank you! 💪`;
+
+      sendWhatsAppReceipt({
+        member: {
+          id: settlePaymentTarget.memberId,
+          fullName: settlePaymentTarget.memberName,
+          phone: targetPhone,
+          whatsapp: targetPhone,
+          memberCode: member?.memberCode || 'BSF-MEMBER'
+        },
+        payment: updatedPaymentForReceipt,
+        gymSettings: {
+          gymName: settings.gymName,
+          address: settings.address,
+          city: settings.city,
+          state: settings.state,
+          pincode: settings.pincode,
+          phone: settings.phone,
+          email: settings.email,
+          gstNumber: settings.gstNumber,
+          receiptTerms: settings.receiptTerms,
+          receiptCollectorName: settings.receiptCollectorName
+        },
+        renewal: {
+          packageName: settlePaymentTarget.packageName,
+          startDate: settlePaymentTarget.paymentDate,
+          expiryDate: settlePaymentTarget.expiryDate || member?.expiryDate || 'N/A'
+        },
+        targetPhone,
+        customMessage: settleMessage,
+        isSettlement: true
+      }).then(() => {
+        refreshWhatsAppLogs();
+      }).catch(err => {
+        console.warn('[PaymentManagement] Settle invoice auto-dispatch notice:', err?.message);
+      });
+    }
 
     setIsSettleModalOpen(false);
   };
@@ -593,8 +669,8 @@ export const PaymentManagement: React.FC = () => {
           <input
             type="text"
             placeholder="Search by receipt # (BSF-REC-...), member name, phone or UPI ref..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
             className="w-full pl-10 pr-4 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-white text-xs placeholder:text-zinc-500 focus:border-orange-400 focus:outline-none"
           />
         </div>
@@ -603,7 +679,7 @@ export const PaymentManagement: React.FC = () => {
         <div className="sm:col-span-3">
           <select
             value={monthFilter}
-            onChange={e => setMonthFilter(e.target.value)}
+            onChange={e => { setMonthFilter(e.target.value); setCurrentPage(1); }}
             className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-300 text-xs focus:border-orange-400 focus:outline-none font-mono"
           >
             <option value="all">📅 All Months & Years</option>
@@ -620,7 +696,7 @@ export const PaymentManagement: React.FC = () => {
             <div className="sm:col-span-2">
               <select
                 value={methodFilter}
-                onChange={e => setMethodFilter(e.target.value)}
+                onChange={e => { setMethodFilter(e.target.value); setCurrentPage(1); }}
                 className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-300 text-xs focus:border-orange-400 focus:outline-none"
               >
                 <option value="all">All Methods</option>
@@ -634,7 +710,7 @@ export const PaymentManagement: React.FC = () => {
             <div className="sm:col-span-2">
               <select
                 value={statusFilter}
-                onChange={e => setStatusFilter(e.target.value)}
+                onChange={e => { setStatusFilter(e.target.value); setCurrentPage(1); }}
                 className="w-full px-3 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-300 text-xs focus:border-orange-400 focus:outline-none"
               >
                 <option value="all">All Statuses</option>
@@ -682,7 +758,7 @@ export const PaymentManagement: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800/60 font-sans-body">
-                {filteredPayments.map(p => (
+                {paginatedPayments.map(p => (
                   <tr key={p.id} className="hover:bg-zinc-800/30 transition">
                     {/* Receipt # */}
                     <td className="py-3.5 px-4">
@@ -788,6 +864,38 @@ export const PaymentManagement: React.FC = () => {
               </tbody>
             </table>
           </div>
+
+          {/* Payments Table Pagination Bar */}
+          {filteredPayments.length > pageSize && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 bg-zinc-950/70 border-t border-zinc-800 text-xs">
+              <div className="text-zinc-400">
+                Showing <span className="font-bold text-white font-mono">{(currentPage - 1) * pageSize + 1}</span> to{' '}
+                <span className="font-bold text-white font-mono">{Math.min(filteredPayments.length, currentPage * pageSize)}</span> of{' '}
+                <span className="font-bold text-orange-400 font-mono">{filteredPayments.length}</span> payments
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-lg font-semibold transition border border-zinc-700 text-xs"
+                >
+                  Previous
+                </button>
+                <span className="px-2 text-zinc-400 font-mono text-xs">
+                  Page <span className="text-white font-bold">{currentPage}</span> of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage >= totalPages}
+                  className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 disabled:hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-lg font-semibold transition border border-zinc-700 text-xs"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

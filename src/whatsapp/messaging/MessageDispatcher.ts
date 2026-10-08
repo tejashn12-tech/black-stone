@@ -1,4 +1,4 @@
-import { WASocket } from '@whiskeysockets/baileys';
+import type { WASocket } from '@whiskeysockets/baileys';
 import {
   WhatsAppNotConnectedError,
   WhatsAppInvalidRecipientError,
@@ -39,14 +39,14 @@ export class MessageDispatcher {
     // Strip non-digits
     let clean = phone.replace(/\D/g, '');
 
-    // If 10 digits (standard Indian mobile without country code), prepend 91
-    if (clean.length === 10) {
-      clean = `91${clean}`;
-    }
-
-    // If starts with 0 and has 11 digits, replace leading 0 with 91
+    // Handle leading 0s or extra prefixes (e.g. 091..., 0...)
     if (clean.length === 11 && clean.startsWith('0')) {
       clean = `91${clean.slice(1)}`;
+    } else if (clean.length === 13 && clean.startsWith('910')) {
+      clean = `91${clean.slice(3)}`;
+    } else if (clean.length === 10) {
+      // If 10 digits (standard Indian mobile without country code), prepend 91
+      clean = `91${clean}`;
     }
 
     if (clean.length < 10) {
@@ -67,10 +67,10 @@ export class MessageDispatcher {
     socket: WASocket | null,
     options: SendMessageOptions
   ): Promise<SendMessageResult> {
-    const { to, text, type, recipientName, memberId, receiptNo, idempotencyKey } = options;
+    const { to, text, type, recipientName, memberId, receiptNo, idempotencyKey, document, fileName, mimetype, caption } = options;
 
-    if (!text || !text.trim()) {
-      throw new WhatsAppSendFailedError('Message content cannot be empty.');
+    if ((!text || !text.trim()) && !document) {
+      throw new WhatsAppSendFailedError('Message content or document cannot be empty.');
     }
 
     const jid = MessageDispatcher.formatJid(to);
@@ -78,7 +78,8 @@ export class MessageDispatcher {
     const formattedRecipientPhone = `+${recipientDigits}`;
 
     // Step 1: Server-side rate limit & per-recipient cooldown check
-    const rateCheck = this.rateLimiter.checkRateLimit(formattedRecipientPhone);
+    const isAttachment = Boolean(document || type === 'payment_receipt');
+    const rateCheck = this.rateLimiter.checkRateLimit(formattedRecipientPhone, isAttachment);
     if (!rateCheck.allowed) {
       throw new WhatsAppRateLimitError(
         rateCheck.reason || 'Server rate limit exceeded. Please wait before sending another message.',
@@ -128,12 +129,16 @@ export class MessageDispatcher {
     }
 
     // Step 3: Create message record in QUEUED state
+    const displayContent = document
+      ? `[Document: ${fileName || 'file.pdf'}] ${(caption || text || '').trim()}`.trim()
+      : (text || '').trim();
+
     const trackedMessage = await this.statusTracker.createQueuedMessage({
       recipientPhone: formattedRecipientPhone,
       recipientJid: jid,
       recipientName: recipientName || formattedRecipientPhone,
-      content: text.trim(),
-      type: type || 'custom',
+      content: displayContent,
+      type: type || (document ? 'payment_receipt' : 'custom'),
       memberId,
       receiptNo
     });
@@ -151,14 +156,54 @@ export class MessageDispatcher {
     // Record rate limit reservation
     this.rateLimiter.recordDispatch(formattedRecipientPhone);
 
+    // Verify recipient existence and obtain canonical WhatsApp JID
+    let targetJid = jid;
+    try {
+      const onWa = await Promise.race([
+        socket.onWhatsApp(jid),
+        new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
+      ]);
+      if (Array.isArray(onWa)) {
+        if (onWa.length === 0 || onWa[0]?.exists === false) {
+          throw new WhatsAppInvalidRecipientError(
+            `Recipient (${formattedRecipientPhone}) is not registered on WhatsApp.`
+          );
+        }
+        if (onWa[0]?.jid) {
+          targetJid = onWa[0].jid;
+        }
+      }
+    } catch (verErr: any) {
+      if (verErr instanceof WhatsAppInvalidRecipientError) {
+        await this.statusTracker.recordFailed(trackedMessage.id, verErr);
+        if (idempotencyKey) {
+          await this.idempotencyManager.markFailed(idempotencyKey.trim(), verErr);
+        }
+        throw verErr;
+      }
+      // Non-fatal / timeout: proceed with targetJid
+    }
+
     // Step 5: Transition to SENDING
     await this.statusTracker.recordSending(trackedMessage.id);
 
     try {
-      // Dispatch payload frame over WebSocket connection
-      const result = await socket.sendMessage(jid, {
-        text: text.trim()
-      });
+      // Dispatch payload frame over WebSocket connection to verified recipient
+      let messagePayload: any;
+      if (document) {
+        messagePayload = {
+          document: Buffer.isBuffer(document) ? document : Buffer.from(document),
+          mimetype: mimetype || 'application/pdf',
+          fileName: fileName || 'document.pdf',
+          caption: (caption || text || '').trim() || undefined
+        };
+      } else {
+        messagePayload = {
+          text: (text || '').trim()
+        };
+      }
+
+      const result = await socket.sendMessage(targetJid, messagePayload);
 
       const baileysMessageId = result?.key?.id || `msg-${Date.now()}`;
 

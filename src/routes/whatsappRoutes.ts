@@ -3,13 +3,18 @@ import { WhatsAppService } from '../whatsapp/WhatsAppService';
 import {
   WhatsAppError,
   WhatsAppRateLimitError,
-  WhatsAppSendInProgressError
+  WhatsAppSendInProgressError,
+  WhatsAppNotConnectedError
 } from '../whatsapp/errors/WhatsAppErrors';
 import { AuthenticatedRequest } from '../middleware/authenticate';
 import { MessageRateLimiter } from '../whatsapp/ratelimit/MessageRateLimiter';
 import { IdempotencyManager } from '../whatsapp/idempotency/IdempotencyManager';
 import { RenewalAutomationService } from '../whatsapp/automation/RenewalAutomationService';
 import { getAdminDb } from '../config/firebase';
+import { HandshakeDiagnostics } from '../whatsapp/diagnostics/HandshakeDiagnostics';
+import { MessageStatusTracker } from '../whatsapp/messaging/MessageStatusTracker';
+import { MessageDispatcher } from '../whatsapp/messaging/MessageDispatcher';
+import { generateReceiptPdfBuffer, ReceiptPdfData } from '../utils/receiptPdfGenerator';
 
 export const whatsappRoutes = Router();
 const whatsappService = WhatsAppService.getInstance();
@@ -97,6 +102,52 @@ whatsappRoutes.get(['/diagnostics', '/health'], (_req: AuthenticatedRequest, res
 });
 
 /**
+ * GET /api/whatsapp/handshake-diagnostics
+ * Returns the deep production authentication handshake diagnostic report.
+ * Strictly adheres to privacy: NO credentials, secret keys, or auth tokens are exposed.
+ */
+whatsappRoutes.get('/handshake-diagnostics', async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const report = await HandshakeDiagnostics.getInstance().getDiagnosticReport();
+    res.json({
+      success: true,
+      report
+    });
+  } catch (err: any) {
+    console.error('[whatsappRoutes] Error generating handshake diagnostics report:', err);
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed generating handshake diagnostics report'
+    });
+  }
+});
+
+/**
+ * POST /api/whatsapp/clean-prod-vault
+ * Cleans the production authentication vault once prior to production device pairing.
+ * SAFEGUARD: Only executes in production environment, and only deletes bsf_whatsapp_session_prod.
+ * NEVER deletes or alters bsf_whatsapp_session_dev.
+ */
+whatsappRoutes.post('/clean-prod-vault', async (_req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const cleaned = await whatsappService.cleanProductionVaultOnce();
+    res.json({
+      success: true,
+      cleaned,
+      message: cleaned
+        ? 'Production session vault (bsf_whatsapp_session_prod) successfully cleaned.'
+        : 'Production session vault reset skipped (environment is not production or already clean).'
+    });
+  } catch (err: any) {
+    console.error('[whatsappRoutes] Error cleaning production vault:', err);
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to clean production vault.'
+    });
+  }
+});
+
+/**
  * POST /api/whatsapp/connect
  * Initiates the Baileys socket connection and QR generation
  */
@@ -139,6 +190,38 @@ whatsappRoutes.post('/disconnect', async (req: AuthenticatedRequest, res: Respon
     res.status(500).json({
       success: false,
       error: err?.message || 'Failed to disconnect WhatsApp.'
+    });
+  }
+});
+
+/**
+ * GET /api/whatsapp/verify-recipient/:phone
+ * Checks whether a phone number is registered on WhatsApp and retrieves its canonical JID
+ */
+whatsappRoutes.get('/verify-recipient/:phone', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const socket = (whatsappService as any).connectionManager.getSocket();
+    if (!socket) {
+      res.status(503).json({ success: false, error: 'WhatsApp is not connected.' });
+      return;
+    }
+    const phone = req.params.phone;
+    let clean = phone.replace(/\D/g, '');
+    if (clean.length === 10) clean = `91${clean}`;
+    if (clean.length === 11 && clean.startsWith('0')) clean = `91${clean.slice(1)}`;
+    const jid = `${clean}@s.whatsapp.net`;
+
+    const results = await socket.onWhatsApp(jid);
+    res.json({
+      success: true,
+      phone,
+      formattedJid: jid,
+      results
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to verify recipient on WhatsApp.'
     });
   }
 });
@@ -224,6 +307,496 @@ whatsappRoutes.post('/send', async (req: AuthenticatedRequest, res: Response): P
       success: false,
       error: 'Unable to deliver message due to a connection or network issue.'
     });
+  }
+});
+
+const DEFAULT_NEW_MEMBER_TEMPLATE =
+  `Hi {name}! 👋\n\nWelcome to Blackstone Fitness (BSF)! 💪\n\nYour membership has been successfully registered with us.\n\nWe’re excited to have you as part of the BSF family.\n\nIf you have any questions regarding your membership, timings, or training, feel free to contact us.\n\nSee you at the gym! 🏋️\n\n— Blackstone Fitness`;
+
+const DEFAULT_RENEWAL_TEMPLATE =
+  `Hi {name}! 👋\n\nYour membership at Blackstone Fitness (BSF) has been successfully renewed. 💪\n\nMembership Plan: {plan}\nRenewal Date: {renewalDate}\nNew Expiry Date: {expiryDate}\n\nThank you for continuing your journey with Blackstone Fitness.\n\nKeep training. Keep progressing. 💪🔥\n\n— Blackstone Fitness`;
+
+/**
+ * POST /api/whatsapp/notify/admission
+ * Triggers exactly ONE automatic WhatsApp welcome message for a new member admission.
+ * Protected by idempotency key: admissionWhatsAppNotification:{memberId}
+ */
+whatsappRoutes.post('/notify/admission', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const { member, customTemplate, testMode, testPhone } = req.body || {};
+
+  if (!member && !testMode) {
+    res.status(400).json({ success: false, error: 'Member details are required.' });
+    return;
+  }
+
+  const memberName = member?.fullName || member?.name || 'Member';
+  const rawTargetPhone = testMode ? testPhone : (member?.whatsapp || member?.phone);
+
+  if (!rawTargetPhone || typeof rawTargetPhone !== 'string' || !rawTargetPhone.trim()) {
+    res.status(400).json({ success: false, error: 'Recipient phone number is required.' });
+    return;
+  }
+
+  // Compose template with variable substitution
+  const templateToUse = (typeof customTemplate === 'string' && customTemplate.trim())
+    ? customTemplate.trim()
+    : DEFAULT_NEW_MEMBER_TEMPLATE;
+
+  const messageText = templateToUse
+    .replace(/{name}/g, memberName)
+    .replace(/{MEMBER_NAME}/g, memberName)
+    .replace(/{plan}/g, member?.packageName || 'Membership')
+    .replace(/{expiryDate}/g, member?.expiryDate || 'N/A');
+
+  try {
+    // Real admissions enforce strict idempotency key: admissionWhatsAppNotification:{memberId}
+    const idempotencyKey = testMode
+      ? `test:admission:${Date.now()}`
+      : (req.body?.idempotencyKey || `admissionWhatsAppNotification:${member?.id}`);
+
+    const result = await whatsappService.sendMessage({
+      to: rawTargetPhone.trim(),
+      text: messageText,
+      type: 'NEW_MEMBER',
+      recipientName: memberName,
+      memberId: member?.id,
+      idempotencyKey
+    });
+
+    res.json({
+      success: true,
+      status: result.status || 'SENT',
+      messageId: result.messageId,
+      trackingId: result.trackingId,
+      isDuplicate: result.isDuplicate || false,
+      statusDisplay: result.statusDisplay || 'Accepted by WhatsApp Connection'
+    });
+  } catch (err: any) {
+    if (err instanceof WhatsAppNotConnectedError) {
+      try {
+        const jid = MessageDispatcher.formatJid(rawTargetPhone);
+        const tracker = MessageStatusTracker.getInstance();
+        const queued = await tracker.createQueuedMessage({
+          recipientPhone: `+${jid.split('@')[0]}`,
+          recipientJid: jid,
+          recipientName: memberName,
+          content: messageText,
+          type: 'NEW_MEMBER',
+          memberId: member?.id
+        });
+        await tracker.recordFailed(queued.id, err);
+      } catch {}
+
+      res.status(503).json({
+        success: false,
+        status: 'FAILED',
+        error: err.message,
+        isDisconnected: true
+      });
+      return;
+    }
+
+    if (err instanceof WhatsAppRateLimitError) {
+      res.status(429).json({
+        success: false,
+        status: 'FAILED',
+        error: err.message,
+        retryAfterSeconds: err.retryAfterSeconds
+      });
+      return;
+    }
+
+    console.error('[whatsappRoutes] Error dispatching admission message:', err?.message);
+    try {
+      const jid = MessageDispatcher.formatJid(rawTargetPhone);
+      const tracker = MessageStatusTracker.getInstance();
+      const queued = await tracker.createQueuedMessage({
+        recipientPhone: `+${jid.split('@')[0]}`,
+        recipientJid: jid,
+        recipientName: memberName,
+        content: messageText,
+        type: 'NEW_MEMBER',
+        memberId: member?.id
+      });
+      await tracker.recordFailed(queued.id, err);
+    } catch {}
+
+    res.status(500).json({
+      success: false,
+      status: 'FAILED',
+      error: err?.message || 'Failed to dispatch new member admission notification.'
+    });
+  }
+});
+
+/**
+ * POST /api/whatsapp/notify/renewal
+ * Triggers exactly ONE automatic WhatsApp confirmation message for a successful membership renewal.
+ * Protected by idempotency key: renewal:{renewalId}:{memberId}
+ */
+whatsappRoutes.post('/notify/renewal', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  const { member, renewalDetails, customTemplate, testMode, testPhone } = req.body || {};
+
+  if (!member && !testMode) {
+    res.status(400).json({ success: false, error: 'Member details are required.' });
+    return;
+  }
+
+  const memberName = member?.fullName || member?.name || 'Member';
+  const rawTargetPhone = testMode ? testPhone : (member?.whatsapp || member?.phone);
+
+  if (!rawTargetPhone || typeof rawTargetPhone !== 'string' || !rawTargetPhone.trim()) {
+    res.status(400).json({ success: false, error: 'Recipient phone number is required.' });
+    return;
+  }
+
+  const planName = renewalDetails?.planName || member?.packageName || 'Gym Membership';
+  const renewalDate = renewalDetails?.renewalDate || new Date().toISOString().split('T')[0];
+  const expiryDate = renewalDetails?.expiryDate || member?.expiryDate || 'N/A';
+  const renewalId = renewalDetails?.renewalId || `ren-${Date.now()}`;
+
+  // Compose template with variable substitution
+  const templateToUse = (typeof customTemplate === 'string' && customTemplate.trim())
+    ? customTemplate.trim()
+    : DEFAULT_RENEWAL_TEMPLATE;
+
+  const messageText = templateToUse
+    .replace(/{name}/g, memberName)
+    .replace(/{MEMBER_NAME}/g, memberName)
+    .replace(/{plan}/g, planName)
+    .replace(/{PLAN_NAME}/g, planName)
+    .replace(/{renewalDate}/g, renewalDate)
+    .replace(/{expiryDate}/g, expiryDate);
+
+  try {
+    // Real renewals enforce strict idempotency key: renewal:{renewalId}:{memberId}
+    const idempotencyKey = testMode
+      ? `test:renewal:${Date.now()}`
+      : (req.body?.idempotencyKey || `renewal:${renewalId}:${member?.id}`);
+
+    // Generate official renewal PDF invoice buffer to send along with message
+    const paymentRecord = req.body?.payment || renewalDetails?.payment;
+    let pdfBuffer: Buffer | null = null;
+    let cleanPdfFileName = `BSF_Receipt_${memberName.replace(/[^a-zA-Z0-9_-]/g, '_')}_${renewalDetails?.receiptNo || 'REC'}.pdf`;
+    let effectiveReceiptNo = renewalDetails?.receiptNo || paymentRecord?.receiptNo;
+
+    try {
+      const gymSettings = req.body?.gymSettings || {};
+      const receiptData: ReceiptPdfData = {
+        gymSettings: {
+          gymName: gymSettings.gymName || 'BLACK STONE FITNESS',
+          address: gymSettings.address || '#42, 2nd Stage, Vijayanagar / Dattagalli Ring Road',
+          city: gymSettings.city || 'Mysuru',
+          state: gymSettings.state || 'Karnataka',
+          pincode: gymSettings.pincode || '570022',
+          phone: gymSettings.phone || '+91 98803 97294',
+          email: gymSettings.email || 'blackstonefitness@gmail.com',
+          gstNumber: gymSettings.gstNumber || '29ABCDE1234F1Z5',
+          receiptTerms: gymSettings.receiptTerms,
+          receiptCollectorName: gymSettings.receiptCollectorName
+        },
+        member: {
+          fullName: memberName,
+          phone: member?.phone || rawTargetPhone,
+          whatsapp: member?.whatsapp || rawTargetPhone,
+          memberCode: member?.memberCode || 'BSF-MEMBER'
+        },
+        payment: {
+          id: paymentRecord?.id || renewalId,
+          receiptNo: paymentRecord?.receiptNo || renewalDetails?.receiptNo || `BSF-REC-${Math.floor(1000 + Math.random() * 9000)}`,
+          paymentDate: paymentRecord?.paymentDate || renewalDate,
+          paymentTime: paymentRecord?.paymentTime,
+          paymentMethod: paymentRecord?.paymentMethod || 'UPI',
+          status: paymentRecord?.status || (Number(paymentRecord?.pendingAmount || 0) === 0 ? 'PAID' : 'PARTIALLY PAID'),
+          totalPackageAmount: Number(paymentRecord?.totalPackageAmount || paymentRecord?.amountPaid || 0),
+          amountPaid: Number(paymentRecord?.amountPaid || 0),
+          pendingAmount: Number(paymentRecord?.pendingAmount || 0),
+          discount: Number(paymentRecord?.discount || 0),
+          notes: paymentRecord?.notes || `Membership Renewal for ${planName}`,
+          staffName: paymentRecord?.staffName || gymSettings.receiptCollectorName
+        },
+        renewal: {
+          packageName: planName,
+          startDate: renewalDetails?.startDate || renewalDate,
+          expiryDate: expiryDate,
+          durationMonths: renewalDetails?.durationMonths || 1
+        }
+      };
+
+      pdfBuffer = generateReceiptPdfBuffer(receiptData);
+      const cleanName = memberName.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const cleanRecNo = receiptData.payment.receiptNo.replace(/[^a-zA-Z0-9_-]/g, '_');
+      cleanPdfFileName = `BSF_Receipt_${cleanName}_${cleanRecNo}.pdf`;
+      effectiveReceiptNo = receiptData.payment.receiptNo;
+    } catch (pdfGenErr: any) {
+      console.warn('[whatsappRoutes] Could not generate renewal invoice PDF, will dispatch message text:', pdfGenErr?.message);
+    }
+
+    const result = await whatsappService.sendMessage({
+      to: rawTargetPhone.trim(),
+      text: messageText,
+      caption: messageText,
+      document: pdfBuffer || undefined,
+      fileName: pdfBuffer ? cleanPdfFileName : undefined,
+      mimetype: pdfBuffer ? 'application/pdf' : undefined,
+      type: 'MEMBERSHIP_RENEWAL',
+      recipientName: memberName,
+      memberId: member?.id,
+      receiptNo: effectiveReceiptNo,
+      idempotencyKey
+    });
+
+    res.json({
+      success: true,
+      status: result.status || 'SENT',
+      messageId: result.messageId,
+      trackingId: result.trackingId,
+      isDuplicate: result.isDuplicate || false,
+      statusDisplay: result.statusDisplay || 'Accepted by WhatsApp Connection',
+      receiptSent: Boolean(pdfBuffer),
+      fileName: pdfBuffer ? cleanPdfFileName : undefined
+    });
+  } catch (err: any) {
+    if (err instanceof WhatsAppNotConnectedError) {
+      try {
+        const jid = MessageDispatcher.formatJid(rawTargetPhone);
+        const tracker = MessageStatusTracker.getInstance();
+        const queued = await tracker.createQueuedMessage({
+          recipientPhone: `+${jid.split('@')[0]}`,
+          recipientJid: jid,
+          recipientName: memberName,
+          content: messageText,
+          type: 'MEMBERSHIP_RENEWAL',
+          memberId: member?.id,
+          receiptNo: renewalDetails?.receiptNo
+        });
+        await tracker.recordFailed(queued.id, err);
+      } catch {}
+
+      res.status(503).json({
+        success: false,
+        status: 'FAILED',
+        error: err.message,
+        isDisconnected: true
+      });
+      return;
+    }
+
+    if (err instanceof WhatsAppRateLimitError) {
+      res.status(429).json({
+        success: false,
+        status: 'FAILED',
+        error: err.message,
+        retryAfterSeconds: err.retryAfterSeconds
+      });
+      return;
+    }
+
+    console.error('[whatsappRoutes] Error dispatching renewal message:', err?.message);
+    try {
+      const jid = MessageDispatcher.formatJid(rawTargetPhone);
+      const tracker = MessageStatusTracker.getInstance();
+      const queued = await tracker.createQueuedMessage({
+        recipientPhone: `+${jid.split('@')[0]}`,
+        recipientJid: jid,
+        recipientName: memberName,
+        content: messageText,
+        type: 'MEMBERSHIP_RENEWAL',
+        memberId: member?.id,
+        receiptNo: renewalDetails?.receiptNo
+      });
+      await tracker.recordFailed(queued.id, err);
+    } catch {}
+
+    res.status(500).json({
+      success: false,
+      status: 'FAILED',
+      error: err?.message || 'Failed to dispatch membership renewal notification.'
+    });
+  }
+});
+
+/**
+ * POST /api/whatsapp/receipt/pdf
+ * Generates and streams an official printable A4 PDF receipt matching the BSF reference layout.
+ */
+whatsappRoutes.post('/receipt/pdf', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { gymSettings, member, payment, renewal } = req.body || {};
+    if (!payment || !member) {
+      res.status(400).json({ success: false, error: 'Member and payment details are required.' });
+      return;
+    }
+
+    const receiptData: ReceiptPdfData = {
+      gymSettings: {
+        gymName: gymSettings?.gymName || 'BLACK STONE FITNESS',
+        address: gymSettings?.address || '#42, 2nd Stage, Vijayanagar / Dattagalli Ring Road',
+        city: gymSettings?.city || 'Mysuru',
+        state: gymSettings?.state || 'Karnataka',
+        pincode: gymSettings?.pincode || '570022',
+        phone: gymSettings?.phone || '+91 98803 97294',
+        email: gymSettings?.email || 'blackstonefitness@gmail.com',
+        gstNumber: gymSettings?.gstNumber || '29ABCDE1234F1Z5',
+        receiptTerms: gymSettings?.receiptTerms,
+        receiptCollectorName: gymSettings?.receiptCollectorName
+      },
+      member: {
+        fullName: member.fullName || member.name || 'Member',
+        phone: member.phone || '',
+        whatsapp: member.whatsapp || member.phone,
+        memberCode: member.memberCode || 'BSF-MEMBER'
+      },
+      payment: {
+        id: payment.id || `pay-${Date.now()}`,
+        receiptNo: payment.receiptNo || `BSF-REC-${Math.floor(1000 + Math.random() * 9000)}`,
+        paymentDate: payment.paymentDate || new Date().toISOString().split('T')[0],
+        paymentTime: payment.paymentTime,
+        paymentMethod: payment.paymentMethod || 'UPI',
+        status: (payment.status || 'PAID').toUpperCase(),
+        totalPackageAmount: Number(payment.totalPackageAmount || payment.amountPaid || 0),
+        amountPaid: Number(payment.amountPaid || 0),
+        pendingAmount: Number(payment.pendingAmount || 0),
+        discount: Number(payment.discount || 0),
+        notes: payment.notes,
+        staffName: payment.staffName || gymSettings?.receiptCollectorName
+      },
+      renewal: {
+        packageName: renewal?.packageName || payment.packageName || 'Membership',
+        startDate: renewal?.startDate || payment.paymentDate || new Date().toISOString().split('T')[0],
+        expiryDate: renewal?.expiryDate || payment.expiryDate || 'N/A',
+        durationMonths: renewal?.durationMonths || 1
+      }
+    };
+
+    const pdfBuffer = generateReceiptPdfBuffer(receiptData);
+    const cleanMemberName = (member.fullName || 'Member').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const cleanReceiptNo = (payment.receiptNo || 'REC').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const filename = `BSF_Receipt_${cleanMemberName}_${cleanReceiptNo}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.send(pdfBuffer);
+  } catch (err: any) {
+    console.error('[whatsappRoutes] Error generating receipt PDF:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Failed to generate receipt PDF' });
+  }
+});
+
+/**
+ * POST /api/whatsapp/receipt/send
+ * Sends an official PDF receipt document to a member via the existing WhatsApp connection.
+ * Strictly verifies payment status is PAID before sending.
+ */
+whatsappRoutes.post('/receipt/send', async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+  try {
+    const { gymSettings, member, payment, renewal, targetPhone, customMessage, isSettlement } = req.body || {};
+    if (!payment || !member) {
+      res.status(400).json({ success: false, error: 'Member and payment details are required.' });
+      return;
+    }
+
+    // Allow sending receipt for any payment where amount was paid or marked paid
+    const hasPayment = Number(payment.amountPaid || 0) > 0 || (payment.status || '').toUpperCase() === 'PAID' || Number(payment.totalPackageAmount || 0) > 0;
+    if (!hasPayment) {
+      res.status(400).json({ success: false, error: 'Cannot send receipt. No payment amount recorded.' });
+      return;
+    }
+
+    const rawPhone = targetPhone || member.whatsapp || member.phone;
+    if (!rawPhone || !rawPhone.trim()) {
+      res.status(400).json({ success: false, error: 'Recipient phone number is required.' });
+      return;
+    }
+
+    const memberName = member.fullName || member.name || 'Member';
+    const pendingVal = Number(payment.pendingAmount || 0);
+    const amountPaidVal = Number(payment.amountPaid || 0);
+    const totalPkgVal = Number(payment.totalPackageAmount || (amountPaidVal + pendingVal) || amountPaidVal || 0);
+
+    const receiptData: ReceiptPdfData = {
+      gymSettings: {
+        gymName: gymSettings?.gymName || 'BLACK STONE FITNESS',
+        address: gymSettings?.address || '#42, 2nd Stage, Vijayanagar / Dattagalli Ring Road',
+        city: gymSettings?.city || 'Mysuru',
+        state: gymSettings?.state || 'Karnataka',
+        pincode: gymSettings?.pincode || '570022',
+        phone: gymSettings?.phone || '+91 98803 97294',
+        email: gymSettings?.email || 'blackstonefitness@gmail.com',
+        gstNumber: gymSettings?.gstNumber || '29ABCDE1234F1Z5',
+        receiptTerms: gymSettings?.receiptTerms,
+        receiptCollectorName: gymSettings?.receiptCollectorName
+      },
+      member: {
+        fullName: memberName,
+        phone: member.phone || rawPhone,
+        whatsapp: member.whatsapp || rawPhone,
+        memberCode: member.memberCode || 'BSF-MEMBER'
+      },
+      payment: {
+        id: payment.id || `pay-${Date.now()}`,
+        receiptNo: payment.receiptNo || `BSF-REC-${Math.floor(1000 + Math.random() * 9000)}`,
+        paymentDate: payment.paymentDate || new Date().toISOString().split('T')[0],
+        paymentTime: payment.paymentTime,
+        paymentMethod: payment.paymentMethod || 'UPI',
+        status: payment.status || (pendingVal === 0 ? 'PAID' : 'PARTIALLY PAID'),
+        totalPackageAmount: totalPkgVal,
+        amountPaid: amountPaidVal,
+        pendingAmount: pendingVal,
+        discount: Number(payment.discount || 0),
+        notes: payment.notes,
+        staffName: payment.staffName || gymSettings?.receiptCollectorName
+      },
+      renewal: {
+        packageName: renewal?.packageName || payment.packageName || 'Membership',
+        startDate: renewal?.startDate || payment.paymentDate || new Date().toISOString().split('T')[0],
+        expiryDate: renewal?.expiryDate || payment.expiryDate || 'N/A',
+        durationMonths: renewal?.durationMonths || 1
+      }
+    };
+
+    const pdfBuffer = generateReceiptPdfBuffer(receiptData);
+    const cleanMemberName = memberName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const cleanReceiptNo = (receiptData.payment.receiptNo || 'REC').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const pdfFileName = `BSF_Receipt_${cleanMemberName}_${cleanReceiptNo}.pdf`;
+
+    const isSettleAction = isSettlement || (payment.notes && payment.notes.includes('Settled'));
+    const defaultCaption = isSettleAction
+      ? `Hi ${memberName}! 👋\n\nYour payment settlement of ₹${amountPaidVal.toLocaleString('en-IN')} has been received and confirmed at Blackstone Fitness (BSF).\n\nReceipt No: ${receiptData.payment.receiptNo}\nMode of Payment: ${payment.paymentMethod || 'UPI'}\n${pendingVal > 0 ? `Remaining Balance: ₹${pendingVal.toLocaleString('en-IN')}\n` : 'Status: Fully Settled ✅\n'}\nYour official settlement invoice is attached below. Thank you! 💪`
+      : `Hi ${memberName}! 👋\n\nYour payment of ₹${amountPaidVal.toLocaleString('en-IN')} has been received and recorded at Blackstone Fitness (BSF).\n\nReceipt No: ${receiptData.payment.receiptNo}\nMode of Payment: ${payment.paymentMethod || 'UPI'}\n${pendingVal > 0 ? `Remaining Balance: ₹${pendingVal.toLocaleString('en-IN')}\n` : 'Status: Fully Paid ✅\n'}\nYour official invoice is attached below. Thank you for choosing BSF! 💪`;
+
+    const pdfCaption = (typeof customMessage === 'string' && customMessage.trim())
+      ? customMessage.trim()
+      : defaultCaption;
+
+    const idempotencyKey = req.body?.idempotencyKey || `receipt:${receiptData.payment.receiptNo || payment.id}:${amountPaidVal}:${Date.now()}`;
+
+    const result = await whatsappService.sendMessage({
+      to: rawPhone.trim(),
+      text: pdfCaption,
+      caption: pdfCaption,
+      type: 'payment_receipt',
+      recipientName: memberName,
+      memberId: member.id,
+      receiptNo: receiptData.payment.receiptNo,
+      idempotencyKey,
+      document: pdfBuffer,
+      fileName: pdfFileName,
+      mimetype: 'application/pdf'
+    });
+
+    res.json({
+      success: true,
+      status: result.status || 'SENT',
+      messageId: result.messageId,
+      trackingId: result.trackingId,
+      isDuplicate: result.isDuplicate || false,
+      fileName: pdfFileName
+    });
+  } catch (err: any) {
+    console.error('[whatsappRoutes] Error sending receipt over WhatsApp:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Failed to send receipt over WhatsApp.' });
   }
 });
 

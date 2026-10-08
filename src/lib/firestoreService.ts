@@ -361,6 +361,19 @@ export async function fsUpdateConsentRecord(id: string, updates: Partial<Consent
   }
 }
 
+export async function fsDeleteConsentRecord(id: string) {
+  if (isFirestoreQuotaExhausted()) return;
+  try {
+    await deleteDoc(doc(db, COLLECTIONS.CONSENT_RECORDS, id));
+  } catch (error) {
+    if (isQuotaExhaustedError(error)) {
+      triggerQuotaExhaustedMode(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    handleFirestoreError(error, OperationType.DELETE, `consentRecords/${id}`);
+  }
+}
+
 // Firestore operations for Data Subject Requests (DSR)
 export async function fsSaveDSR(request: DataSubjectRequest) {
   if (isFirestoreQuotaExhausted()) return;

@@ -5,6 +5,7 @@ import {
   WhatsAppStatusInfo,
   StateTransitionEvent
 } from './types';
+import { getWhatsAppEnvironment, getWhatsAppSessionVault } from '../environment';
 
 /**
  * StatusManager maintains the formal connection state machine for the
@@ -236,7 +237,9 @@ export class StatusManager extends EventEmitter {
       lastError: this.lastError,
       reconnectAttempt: this.reconnectAttempt,
       recentTransitions: [...this.transitions],
-      updatedAt: this.updatedAt
+      updatedAt: this.updatedAt,
+      environment: getWhatsAppEnvironment(),
+      sessionVault: getWhatsAppSessionVault()
     };
   }
 }

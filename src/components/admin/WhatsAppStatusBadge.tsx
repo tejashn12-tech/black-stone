@@ -26,12 +26,12 @@ export const WhatsAppStatusBadge: React.FC<WhatsAppStatusBadgeProps> = ({
   const normStatus = (status || '').toUpperCase().trim();
 
   // Match canonical states
-  if (normStatus === 'QUEUED') {
+  if (normStatus === 'PENDING' || normStatus === 'QUEUED') {
     return (
       <div className={`inline-flex flex-col ${className}`}>
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
           <Clock className="w-3.5 h-3.5 text-amber-400" />
-          <span>{statusDisplay || 'Queued'}</span>
+          <span>{statusDisplay || (normStatus === 'PENDING' ? 'Pending' : 'Queued')}</span>
         </span>
         {showExplanation && (
           <span className="text-[10px] text-zinc-400 mt-1">Awaiting local socket transmission</span>

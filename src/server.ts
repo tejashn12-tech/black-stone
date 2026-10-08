@@ -3,15 +3,34 @@ import cors from 'cors';
 import path from 'path';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
+
+// Suppress internal libsignal session retry noise (Bad MAC / failed to decrypt)
+// which libsignal prints directly to console.error before Baileys automatically emits sendRetryRequest.
+const originalConsoleError = console.error;
+console.error = function (...args: any[]) {
+  const first = typeof args[0] === 'string' ? args[0] : '';
+  if (
+    first.includes('Failed to decrypt message with any known session') ||
+    first.includes('Session error:') ||
+    first.includes('Bad MAC')
+  ) {
+    // Normal Signal ratchet desync retry handled automatically by Baileys sendRetryRequest
+    return;
+  }
+  originalConsoleError.apply(console, args);
+};
+
 import { initializeFirebaseAdmin } from './config/firebase';
 import { logger } from './utils/logger';
 import { whatsappRoutes } from './routes/whatsappRoutes';
 import { WhatsAppService } from './whatsapp/WhatsAppService';
 import { RenewalAutomationService } from './whatsapp/automation/RenewalAutomationService';
+import { getWhatsAppEnvironment, getWhatsAppSessionVault } from './whatsapp/environment';
 
 dotenv.config();
 
 const app = express();
+// Port 3000 is required by the AI Studio environment (reverse proxy runs on 8080)
 const PORT = 3000;
 
 // Initialize Firebase Admin SDK
@@ -152,6 +171,10 @@ async function startServer() {
 
   const server = app.listen(PORT, '0.0.0.0', () => {
     logger.info(`BSF Server running on http://0.0.0.0:${PORT}`);
+    const waEnv = getWhatsAppEnvironment();
+    const waVault = getWhatsAppSessionVault();
+    logger.info(`WHATSAPP_ENVIRONMENT=${waEnv}`);
+    logger.info(`WHATSAPP_SESSION_VAULT=${waVault}`);
   });
 
   // Initialize WhatsApp service on server boot
@@ -190,5 +213,14 @@ async function startServer() {
 }
 
 startServer();
+
+export {
+  getWhatsAppEnvironment,
+  getWhatsAppSessionVault,
+  getWhatsAppVaultDocId,
+  validateVaultDocAccess,
+  DEV_VAULT_DOC_ID,
+  PROD_VAULT_DOC_ID,
+} from './whatsapp/environment';
 
 export default app;

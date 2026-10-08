@@ -1,5 +1,22 @@
-import { DisconnectReason } from '@whiskeysockets/baileys';
+import * as BaileysModule from '@whiskeysockets/baileys';
+import { DisconnectReason as BaileysDisconnectReason } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
+
+const DisconnectReason =
+  (BaileysModule as any)?.DisconnectReason ||
+  (BaileysModule as any)?.default?.DisconnectReason ||
+  BaileysDisconnectReason || {
+    loggedOut: 401,
+    forbidden: 403,
+    timedOut: 408,
+    connectionLost: 408,
+    multideviceMismatch: 411,
+    connectionClosed: 428,
+    connectionReplaced: 440,
+    badSession: 500,
+    restartRequired: 515,
+    unavailableService: 503,
+  };
 
 export enum DisconnectCategory {
   TEMPORARY_NETWORK = 'TEMPORARY_NETWORK',

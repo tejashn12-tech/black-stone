@@ -14,8 +14,16 @@ import {
   Smartphone,
   ChevronRight,
   Sparkles,
-  MessageSquare
+  MessageSquare,
+  Send,
+  Phone,
+  Loader2,
+  AlertCircle
 } from 'lucide-react';
+import {
+  dispatchAdmissionNotification,
+  dispatchRenewalNotification
+} from '../../services/whatsappApiClient';
 
 interface SettingsPanelProps {
   initialSubTab?: 'general' | 'database';
@@ -49,6 +57,95 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [showClearTrainersPlansConfirm, setShowClearTrainersPlansConfirm] = useState(false);
   const [dataClearedSuccess, setDataClearedSuccess] = useState(false);
   const [trainersPlansClearedSuccess, setTrainersPlansClearedSuccess] = useState(false);
+
+  // Test message states
+  const [testAdmissionPhone, setTestAdmissionPhone] = useState(settings.phone || '+91 98803 97294');
+  const [isTestingAdmission, setIsTestingAdmission] = useState(false);
+  const [admissionTestNotice, setAdmissionTestNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const [testRenewalPhone, setTestRenewalPhone] = useState(settings.phone || '+91 98803 97294');
+  const [isTestingRenewal, setIsTestingRenewal] = useState(false);
+  const [renewalTestNotice, setRenewalTestNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const handleTestAdmission = async () => {
+    if (!testAdmissionPhone || !testAdmissionPhone.trim()) {
+      setAdmissionTestNotice({ type: 'error', message: 'Please enter a test phone number' });
+      return;
+    }
+    setIsTestingAdmission(true);
+    setAdmissionTestNotice(null);
+    try {
+      const res = await dispatchAdmissionNotification(null, {
+        testMode: true,
+        testPhone: testAdmissionPhone.trim(),
+        customTemplate: formData.newMemberWelcomeTemplate
+      });
+      if (res.success) {
+        setAdmissionTestNotice({
+          type: 'success',
+          message: `Test welcome message sent! Status: ${res.status || 'SENT'}`
+        });
+      } else {
+        setAdmissionTestNotice({
+          type: 'error',
+          message: res.error || 'Failed to send test admission message'
+        });
+      }
+    } catch (err: any) {
+      setAdmissionTestNotice({
+        type: 'error',
+        message: err?.message || 'Error communicating with WhatsApp gateway'
+      });
+    } finally {
+      setIsTestingAdmission(false);
+      setTimeout(() => setAdmissionTestNotice(null), 6000);
+    }
+  };
+
+  const handleTestRenewal = async () => {
+    if (!testRenewalPhone || !testRenewalPhone.trim()) {
+      setRenewalTestNotice({ type: 'error', message: 'Please enter a test phone number' });
+      return;
+    }
+    setIsTestingRenewal(true);
+    setRenewalTestNotice(null);
+    try {
+      const res = await dispatchRenewalNotification(
+        null,
+        {
+          renewalId: `test-preview-${Date.now()}`,
+          planName: '12-Month Annual Fitness',
+          renewalDate: new Date().toISOString().split('T')[0],
+          expiryDate: '2027-10-05',
+          receiptNo: 'BSF-REC-TEST'
+        },
+        {
+          testMode: true,
+          testPhone: testRenewalPhone.trim(),
+          customTemplate: formData.renewalConfirmationTemplate
+        }
+      );
+      if (res.success) {
+        setRenewalTestNotice({
+          type: 'success',
+          message: `Test renewal confirmation sent! Status: ${res.status || 'SENT'}`
+        });
+      } else {
+        setRenewalTestNotice({
+          type: 'error',
+          message: res.error || 'Failed to send test renewal message'
+        });
+      }
+    } catch (err: any) {
+      setRenewalTestNotice({
+        type: 'error',
+        message: err?.message || 'Error communicating with WhatsApp gateway'
+      });
+    } finally {
+      setIsTestingRenewal(false);
+      setTimeout(() => setRenewalTestNotice(null), 6000);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -310,11 +407,227 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
           </div>
         </div>
 
-        {/* Section 3: WhatsApp Templates */}
+        {/* Section 3: Automated WhatsApp Notifications (New Member & Renewals) */}
+        <div className="p-6 bg-zinc-900/90 border border-zinc-800 rounded-3xl space-y-6">
+          <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-emerald-400" />
+              <div>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+                  Automated WhatsApp Notification Rules
+                </h3>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  Automated instant WhatsApp dispatches for admissions and successful renewals
+                </p>
+              </div>
+            </div>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              Idempotent &amp; Gateway Protected
+            </span>
+          </div>
+
+          {/* 1. New Member Welcome Message */}
+          <div className="p-5 rounded-2xl bg-zinc-950/80 border border-zinc-800/80 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                    New Member Welcome Message
+                  </h4>
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Automatically sent to member's phone immediately when a new member is created
+                </p>
+              </div>
+
+              {/* Enable / Disable Toggle */}
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={formData.enableNewMemberWelcome !== false}
+                  onChange={e => setFormData({ ...formData, enableNewMemberWelcome: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                <span className="ml-2 text-xs font-bold text-zinc-300">
+                  {formData.enableNewMemberWelcome !== false ? 'Enabled' : 'Disabled'}
+                </span>
+              </label>
+            </div>
+
+            {/* Editable Template */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <label className="font-semibold text-zinc-400 uppercase">
+                  Message Template
+                </label>
+                <span className="text-zinc-500 font-mono">
+                  Supported placeholders: <strong className="text-emerald-400">{'{name}'}</strong>, <strong className="text-emerald-400">{'{plan}'}</strong>, <strong className="text-emerald-400">{'{expiryDate}'}</strong>
+                </span>
+              </div>
+              <textarea
+                rows={6}
+                value={formData.newMemberWelcomeTemplate || ''}
+                onChange={e => setFormData({ ...formData, newMemberWelcomeTemplate: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-200 text-xs font-sans-body leading-relaxed focus:border-emerald-500 focus:outline-none"
+                placeholder="Hi {name}! Welcome to Blackstone Fitness..."
+              />
+            </div>
+
+            {/* Test Message Action */}
+            <div className="pt-2 border-t border-zinc-900 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-1 max-w-sm">
+                <Phone className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                <input
+                  type="text"
+                  value={testAdmissionPhone}
+                  onChange={e => setTestAdmissionPhone(e.target.value)}
+                  placeholder="+91 98803 97294"
+                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white font-mono focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleTestAdmission}
+                disabled={isTestingAdmission}
+                className="px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-bold rounded-xl transition flex items-center justify-center gap-2 shrink-0 disabled:opacity-50"
+              >
+                {isTestingAdmission ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Sending Test...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send Test Welcome Message</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {admissionTestNotice && (
+              <div className={`p-2.5 rounded-xl border text-xs flex items-center gap-2 ${
+                admissionTestNotice.type === 'success'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+              }`}>
+                {admissionTestNotice.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                )}
+                <span>{admissionTestNotice.message}</span>
+              </div>
+            )}
+          </div>
+
+          {/* 2. Membership Renewal Message */}
+          <div className="p-5 rounded-2xl bg-zinc-950/80 border border-zinc-800/80 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-sky-400 animate-pulse"></span>
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                    Membership Renewal Message
+                  </h4>
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-0.5">
+                  Automatically sent after membership package, dates, and payment renewal are successfully recorded
+                </p>
+              </div>
+
+              {/* Enable / Disable Toggle */}
+              <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={formData.enableRenewalConfirmation !== false}
+                  onChange={e => setFormData({ ...formData, enableRenewalConfirmation: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-sky-500"></div>
+                <span className="ml-2 text-xs font-bold text-zinc-300">
+                  {formData.enableRenewalConfirmation !== false ? 'Enabled' : 'Disabled'}
+                </span>
+              </label>
+            </div>
+
+            {/* Editable Template */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px]">
+                <label className="font-semibold text-zinc-400 uppercase">
+                  Message Template
+                </label>
+                <span className="text-zinc-500 font-mono">
+                  Supported placeholders: <strong className="text-sky-400">{'{name}'}</strong>, <strong className="text-sky-400">{'{plan}'}</strong>, <strong className="text-sky-400">{'{renewalDate}'}</strong>, <strong className="text-sky-400">{'{expiryDate}'}</strong>
+                </span>
+              </div>
+              <textarea
+                rows={6}
+                value={formData.renewalConfirmationTemplate || ''}
+                onChange={e => setFormData({ ...formData, renewalConfirmationTemplate: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl text-zinc-200 text-xs font-sans-body leading-relaxed focus:border-sky-500 focus:outline-none"
+                placeholder="Hi {name}! Your membership has been renewed..."
+              />
+            </div>
+
+            {/* Test Message Action */}
+            <div className="pt-2 border-t border-zinc-900 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2 flex-1 max-w-sm">
+                <Phone className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                <input
+                  type="text"
+                  value={testRenewalPhone}
+                  onChange={e => setTestRenewalPhone(e.target.value)}
+                  placeholder="+91 98803 97294"
+                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-white font-mono focus:border-sky-500 focus:outline-none"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleTestRenewal}
+                disabled={isTestingRenewal}
+                className="px-4 py-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 text-xs font-bold rounded-xl transition flex items-center justify-center gap-2 shrink-0 disabled:opacity-50"
+              >
+                {isTestingRenewal ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Sending Test...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send Test Renewal Message</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {renewalTestNotice && (
+              <div className={`p-2.5 rounded-xl border text-xs flex items-center gap-2 ${
+                renewalTestNotice.type === 'success'
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                  : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+              }`}>
+                {renewalTestNotice.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                )}
+                <span>{renewalTestNotice.message}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Section 4: WhatsApp Expiry & Birthday Templates */}
         <div className="p-6 bg-zinc-900/90 border border-zinc-800 rounded-3xl space-y-4">
           <div className="flex items-center gap-2 pb-3 border-b border-zinc-800">
             <MessageSquare className="w-4 h-4 text-sky-400" />
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Automated WhatsApp Renewal Message Templates</h3>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Automated WhatsApp Renewal Reminder &amp; Birthday Templates</h3>
           </div>
 
           <div className="space-y-4">

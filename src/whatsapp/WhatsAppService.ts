@@ -11,6 +11,8 @@ import {
   SendMessageOptions,
   SendMessageResult
 } from './status/types';
+import { getWhatsAppEnvironment, getWhatsAppSessionVault } from './environment';
+import { HandshakeDiagnosticTracker } from './diagnostics/HandshakeDiagnosticTracker';
 
 /**
  * WhatsAppService is the primary singleton facade that owns and coordinates
@@ -224,6 +226,8 @@ export class WhatsAppService {
 
     return {
       whatsAppService: 'ONLINE' as const,
+      environment: getWhatsAppEnvironment(),
+      sessionVault: getWhatsAppSessionVault(),
       baileysConnection,
       authentication,
       lastSuccessfulConnection: lastSuccessfulConn,
@@ -237,7 +241,19 @@ export class WhatsAppService {
       messagesFailed: messageMetrics.messagesFailed,
       reconnectAttempts: status.reconnectAttempt,
       qrCurrentlyAvailable,
+      handshakeTrace: HandshakeDiagnosticTracker.getInstance().getSnapshot(
+        getWhatsAppSessionVault(),
+        this.authManager.getVaultDocId()
+      ),
       diagnosticsTimestamp: new Date().toISOString()
     };
+  }
+
+  /**
+   * Resets the production session vault once before the first production pairing.
+   * Safe: Only executes in production, only deletes bsf_whatsapp_session_prod.
+   */
+  public async cleanProductionVaultOnce(): Promise<boolean> {
+    return await this.authManager.cleanProductionVaultOnce();
   }
 }

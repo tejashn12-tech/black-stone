@@ -23,6 +23,7 @@ import {
   CheckCheck
 } from 'lucide-react';
 import { WhatsAppStatusBadge } from './WhatsAppStatusBadge';
+import { fetchWhatsAppStatus, initiateWhatsAppConnect } from '../../services/whatsappApiClient';
 
 export type WhatsAppMessageType = 'renewal' | 'birthday' | 'payment_due' | 'welcome' | 'custom';
 
@@ -39,16 +40,59 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
   onClose,
   defaultType = 'renewal'
 }) => {
-  const { whatsAppSession, sendWhatsAppMessage } = useGym();
+  const { whatsAppSession, sendWhatsAppMessage, whatsAppLogs, refreshWhatsAppLogs, updateWhatsAppConfig } = useGym();
 
   const [messageType, setMessageType] = useState<WhatsAppMessageType>(defaultType);
   const [messageText, setMessageText] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
   const [sendSuccess, setSendSuccess] = useState<boolean>(false);
-  const [sentState, setSentState] = useState<{ status: string; statusDisplay: string; messageId?: string } | null>(null);
+  const [sentState, setSentState] = useState<{ status: string; statusDisplay: string; messageId?: string; trackingId?: string } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
   const [draftKey, setDraftKey] = useState<string>(() => `manual:${member?.id || 'draft'}:${Date.now()}`);
+
+  // Live Gateway Connection State
+  const [gatewayStatus, setGatewayStatus] = useState<string>(
+    () => (whatsAppSession?.status || 'disconnected')
+  );
+  const [gatewayPhone, setGatewayPhone] = useState<string | null>(() => whatsAppSession?.phoneNumber || null);
+
+  // Sync live WhatsApp Gateway status immediately whenever modal opens
+  useEffect(() => {
+    if (isOpen) {
+      fetchWhatsAppStatus(true)
+        .then(res => {
+          if (res?.status) {
+            setGatewayStatus(res.status);
+            if (res.phoneNumber) setGatewayPhone(res.phoneNumber);
+            if (updateWhatsAppConfig) {
+              const mappedStatus =
+                res.status === 'connected' ? 'connected' :
+                res.status === 'connecting' || res.status === 'reconnecting' ? 'connecting' : 'disconnected';
+              updateWhatsAppConfig({
+                status: mappedStatus,
+                phoneNumber: res.phoneNumber || undefined
+              });
+            }
+          }
+        })
+        .catch(err => {
+          console.warn('[MemberWhatsAppModal] Gateway check notice:', err);
+        });
+    }
+  }, [isOpen, updateWhatsAppConfig]);
+
+  // Resolve latest live message status from tracked logs
+  const currentMsgLog = useMemo(() => {
+    if (!sentState) return null;
+    return whatsAppLogs.find(
+      l => (sentState.trackingId && l.id === sentState.trackingId) ||
+           (sentState.messageId && l.messageId === sentState.messageId)
+    );
+  }, [sentState, whatsAppLogs]);
+
+  const activeStatus = currentMsgLog?.status || sentState?.status || 'SENT';
+  const activeStatusDisplay = currentMsgLog?.statusDisplay || sentState?.statusDisplay || 'Accepted by WhatsApp Connection';
 
   // Refresh draft key when modal reopens or member changes
   useEffect(() => {
@@ -165,11 +209,15 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
         setSentState({
           status: res.status || 'SENT',
           statusDisplay: res.statusDisplay || (res.isDuplicate ? 'Already Sent (Duplicate Prevented)' : 'Accepted by WhatsApp Connection'),
-          messageId: res.messageId
+          messageId: res.messageId,
+          trackingId: res.trackingId
         });
         setSendSuccess(true);
         // Regenerate key for next distinct send
         setDraftKey(`manual:${member.id}:${messageType}:${Date.now()}`);
+        if (refreshWhatsAppLogs) {
+          refreshWhatsAppLogs().catch(() => {});
+        }
       } else {
         setSendError(res.error || 'Failed to dispatch via gateway. You can send directly using WhatsApp Web/App below.');
       }
@@ -191,7 +239,7 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
   // Direct wa.me URL
   const waMeUrl = `https://wa.me/${fullWhatsAppPhone}?text=${encodeURIComponent(messageText)}`;
 
-  const isGatewayConnected = whatsAppSession?.status === 'connected';
+  const isGatewayConnected = gatewayStatus === 'connected' || whatsAppSession?.status === 'connected';
 
   return (
     <div
@@ -424,11 +472,11 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
               <span>
                 {isGatewayConnected ? (
                   <>
-                    <strong className="text-emerald-400">Gateway Active:</strong> Ready for 1-click dispatch to +91 {recipientPhone10 || member.phone}
+                    <strong className="text-emerald-400">WhatsApp Gateway Connected {gatewayPhone ? `(${gatewayPhone})` : ''}:</strong> Ready to send messages easily directly to +91 {recipientPhone10 || member.phone}
                   </>
                 ) : (
                   <>
-                    <strong className="text-amber-400">Gateway Offline:</strong> You can send directly using WhatsApp Web/App below.
+                    <strong className="text-amber-400">Gateway Standby:</strong> Dispatch directly via gateway or open in WhatsApp Web/App below.
                   </>
                 )}
               </span>
@@ -449,17 +497,36 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
             <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800 space-y-2 text-xs">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-white flex items-center gap-1.5">
-                  <Check className="w-4 h-4 text-zinc-300" />
-                  <span>Message accepted by WhatsApp connection</span>
+                  <Check className={`w-4 h-4 ${
+                    activeStatus === 'READ' ? 'text-sky-400' :
+                    activeStatus === 'DELIVERED' ? 'text-emerald-400' :
+                    activeStatus === 'SERVER_ACK' ? 'text-teal-400' :
+                    'text-zinc-300'
+                  }`} />
+                  <span>
+                    {activeStatus === 'DELIVERED'
+                      ? 'Delivered to Recipient Device'
+                      : activeStatus === 'READ'
+                      ? 'Read by Recipient (Blue Ticks)'
+                      : activeStatus === 'SERVER_ACK'
+                      ? 'Acknowledged by WhatsApp Server'
+                      : 'Accepted by WhatsApp Connection'}
+                  </span>
                 </span>
                 <WhatsAppStatusBadge
-                  status={sentState.status}
-                  statusDisplay={sentState.statusDisplay}
+                  status={activeStatus}
+                  statusDisplay={activeStatusDisplay}
                   compact={true}
                 />
               </div>
               <p className="text-[11px] text-zinc-400">
-                Transmitted over the active Baileys socket. Delivery & read receipts are tracked live upon receipt from WhatsApp servers.
+                {activeStatus === 'DELIVERED'
+                  ? 'Double ticks confirmed. Message is delivered on the member’s phone.'
+                  : activeStatus === 'READ'
+                  ? 'Blue ticks confirmed. Member opened and viewed the message.'
+                  : activeStatus === 'SERVER_ACK'
+                  ? 'Single tick confirmed. Message received by WhatsApp network and will deliver when member’s phone connects.'
+                  : 'Transmitted over active connection stream. Delivery receipts track live.'}
               </p>
             </div>
           )}
@@ -495,35 +562,25 @@ export const MemberWhatsAppModal: React.FC<MemberWhatsAppModalProps> = ({
               <span>WhatsApp Web/App</span>
             </a>
 
-            {isGatewayConnected ? (
-              <button
-                type="button"
-                onClick={handleSendViaGateway}
-                disabled={isSending || !messageText.trim()}
-                className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:opacity-50"
-              >
-                {isSending ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Dispatching...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    <span>Send via Gateway</span>
-                  </>
-                )}
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleCopyText}
-                className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 border border-zinc-700"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                <span>{copied ? 'Copied!' : 'Copy Text'}</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleSendViaGateway}
+              disabled={isSending || !messageText.trim()}
+              className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20 disabled:opacity-50"
+              title="Send directly using the connected WhatsApp Gateway"
+            >
+              {isSending ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-black" />
+                  <span>Dispatching via Gateway...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4 text-black" />
+                  <span>Send via WhatsApp Gateway</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
       </div>

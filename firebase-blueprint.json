@@ -315,9 +315,25 @@
         "dispatchedAt": { "type": "string", "maxLength": 50 }
       },
       "required": ["trackingKey", "type", "memberId", "memberName", "phone", "status", "dispatchedAt"]
+    },
+    "PrivateServerAuth": {
+      "title": "PrivateServerAuth",
+      "description": "Server-side private WhatsApp session and credential vault records",
+      "type": "object",
+      "properties": {
+        "files": { "type": "object" },
+        "environment": { "type": "string" },
+        "sessionVault": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "serverInstance": { "type": "string" }
+      }
     }
   },
   "firestore": {
+    "/_private_server_auth/{vaultDocId}": {
+      "schema": "PrivateServerAuth",
+      "description": "WhatsApp session backup vault"
+    },
     "/users/{userId}": {
       "schema": "User",
       "description": "User profile and assigned gym mappings"
