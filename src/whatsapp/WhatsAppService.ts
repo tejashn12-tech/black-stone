@@ -67,24 +67,43 @@ export class WhatsAppService {
    * 6. Only then require a new QR scan.
    */
   public async initialize(): Promise<void> {
-    console.log('[WhatsAppService] Step 1: Starting WhatsApp service...');
+    console.log('[WhatsAppService] Starting WhatsApp service (Always-Connected Mode)...');
 
-    // Step 2: Check whether valid authentication state exists
+    // Check whether valid authentication state exists
     const hasValidAuth = this.authManager.hasExistingSession();
 
     if (hasValidAuth) {
-      console.log('[WhatsAppService] Step 2 & 3: Valid authentication state detected. Restoring WhatsApp session...');
+      console.log('[WhatsAppService] Valid authentication state detected. Restoring WhatsApp session...');
       try {
         await this.connectionManager.connect();
-        // Handled via event listeners:
-        // - If restoration succeeds -> status = CONNECTED
-        // - If genuinely invalid/logged out -> status = LOGGED_OUT (Step 5)
       } catch (err: any) {
         console.warn('[WhatsAppService] Session restoration encountered error:', err?.message);
+        // Automatically schedule reconnect so network warm-up recovers seamlessly
+        this.connectionManager.scheduleAutoReconnect('startup_initialization');
       }
     } else {
-      console.log('[WhatsAppService] Step 2: No saved authentication state found. System in DISCONNECTED state. QR scan required upon connect request.');
+      console.log('[WhatsAppService] No saved authentication state found on boot. System ready for initial pairing.');
     }
+
+    // Always-Connected Guard: periodically check every 45 seconds if a saved session
+    // exists while disconnected, and auto-restore the connection so the user never has to reconnect manually.
+    setInterval(() => {
+      try {
+        const currentState = this.statusManager.getState();
+        if (
+          !this.connectionManager.isConnected() &&
+          currentState !== 'RECONNECTING' &&
+          currentState !== 'CONNECTING' &&
+          currentState !== 'LOGGED_OUT' &&
+          this.authManager.hasExistingSession()
+        ) {
+          console.log('[WhatsAppService] Always-Connected Guard: restoring disconnected session in background...');
+          this.connectionManager.connect().catch((guardErr: any) => {
+            console.warn('[WhatsAppService] Background auto-restore notice:', guardErr?.message);
+          });
+        }
+      } catch {}
+    }, 45000);
   }
 
   /**

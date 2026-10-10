@@ -1,4 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+const fs = require('fs');
+const path = require('path');
+const sharp = require('sharp');
+
+// Generate exact Black Stone Fitness Emblem SVG matching the user's uploaded image
+function generateEmblemSvg() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
   <defs>
     <!-- Background Radial Gradients -->
     <radialGradient id="rimMetalBg" cx="50%" cy="50%" r="50%" fx="35%" fy="30%">
@@ -267,4 +273,70 @@
     <circle cx="152" cy="256" r="8" fill="url(#chromeBevel)" stroke="#18181b" stroke-width="1.5"/>
     <circle cx="360" cy="256" r="8" fill="url(#chromeBevel)" stroke="#18181b" stroke-width="1.5"/>
   </g>
-</svg>
+</svg>`;
+}
+
+async function buildAll() {
+  console.log('Generating Black Stone Fitness emblem assets matching uploaded image...');
+  const svgContent = generateEmblemSvg();
+
+  const publicDir = path.join(__dirname, '../public');
+  const distDir = path.join(__dirname, '../dist');
+
+  // Save SVGs
+  const svgTargets = [
+    path.join(publicDir, 'black_stone_fitness_emblem.svg'),
+    path.join(publicDir, 'favicon.svg'),
+    path.join(publicDir, 'logo.svg'),
+    path.join(distDir, 'black_stone_fitness_emblem.svg'),
+    path.join(distDir, 'favicon.svg'),
+    path.join(distDir, 'logo.svg')
+  ];
+
+  for (const target of svgTargets) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, svgContent, 'utf8');
+    console.log(`Saved: ${target}`);
+  }
+
+  // Render PNGs and favicon assets via sharp
+  const svgBuffer = Buffer.from(svgContent);
+
+  const pngSizes = [
+    { name: 'favicon-16x16.png', size: 16 },
+    { name: 'favicon-32x32.png', size: 32 },
+    { name: 'favicon-48x48.png', size: 48 },
+    { name: 'apple-touch-icon.png', size: 180 },
+    { name: 'icon-192.png', size: 192 },
+    { name: 'icon-512.png', size: 512 },
+    { name: 'logo.png', size: 512 }
+  ];
+
+  for (const item of pngSizes) {
+    const pngBuf = await sharp(svgBuffer)
+      .resize(item.size, item.size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .png()
+      .toBuffer();
+
+    fs.writeFileSync(path.join(publicDir, item.name), pngBuf);
+    fs.writeFileSync(path.join(distDir, item.name), pngBuf);
+    console.log(`Rendered: ${item.name} (${item.size}x${item.size})`);
+  }
+
+  // Generate favicon.ico from 32x32 png
+  const icoBuf = await sharp(svgBuffer)
+    .resize(32, 32, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer();
+
+  fs.writeFileSync(path.join(publicDir, 'favicon.ico'), icoBuf);
+  fs.writeFileSync(path.join(distDir, 'favicon.ico'), icoBuf);
+  console.log('Rendered: favicon.ico');
+
+  console.log('All Black Stone Fitness emblem logo and favicon assets built successfully!');
+}
+
+buildAll().catch((err) => {
+  console.error('Error building emblem assets:', err);
+  process.exit(1);
+});

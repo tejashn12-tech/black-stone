@@ -14,10 +14,10 @@ export const BSFLogo: React.FC<BSFLogoProps> = ({
   variant = 'gold'
 }) => {
   const sizeMap = {
-    sm: { icon: 'w-7 h-7', text: 'text-base', sub: 'text-[9px]', padding: 'p-1' },
-    md: { icon: 'w-10 h-10', text: 'text-xl', sub: 'text-[10px]', padding: 'p-1.5' },
-    lg: { icon: 'w-14 h-14', text: 'text-2xl', sub: 'text-xs', padding: 'p-2' },
-    xl: { icon: 'w-20 h-20', text: 'text-4xl', sub: 'text-sm', padding: 'p-3' }
+    sm: { icon: 'w-8 h-8', text: 'text-base', sub: 'text-[9px]', padding: 'p-1' },
+    md: { icon: 'w-11 h-11', text: 'text-xl', sub: 'text-[10px]', padding: 'p-1.5' },
+    lg: { icon: 'w-16 h-16', text: 'text-2xl', sub: 'text-xs', padding: 'p-2' },
+    xl: { icon: 'w-24 h-24', text: 'text-4xl', sub: 'text-sm', padding: 'p-3' }
   };
 
   const current = sizeMap[size];
@@ -31,10 +31,10 @@ export const BSFLogo: React.FC<BSFLogoProps> = ({
   return (
     <div className={`flex items-center gap-2.5 select-none ${className}`} id="bsf-brand-logo">
       {/* Emblem Logo Badge */}
-      <div className={`relative ${current.icon} rounded-full flex-shrink-0 shadow-lg shadow-orange-500/25 border border-orange-500/60 hover:border-orange-400 transition-all duration-300 flex items-center justify-center group bg-zinc-950 overflow-hidden ring-1 ring-orange-500/20`}>
+      <div className={`relative ${current.icon} rounded-full flex-shrink-0 shadow-md shadow-black/80 border border-zinc-800 hover:border-orange-500/80 transition-all duration-300 flex items-center justify-center group bg-black overflow-hidden`}>
         <img
           src="/black_stone_fitness_emblem.svg"
-          alt="Black Stone Fitness Logo Emblem"
+          alt="Black Stone Fitness Logo"
           className="w-full h-full object-contain select-none group-hover:scale-105 transition-transform duration-300 rounded-full"
           loading="eager"
           onError={(e) => {

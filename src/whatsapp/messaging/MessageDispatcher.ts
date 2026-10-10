@@ -159,8 +159,13 @@ export class MessageDispatcher {
     // Verify recipient existence and obtain canonical WhatsApp JID
     let targetJid = jid;
     try {
+      const onWaPromise = socket.onWhatsApp(jid).catch((lookupErr) => {
+        // Silently catch orphaned lookup rejection if race timeout won
+        return [] as any[];
+      });
+
       const onWa = await Promise.race([
-        socket.onWhatsApp(jid),
+        onWaPromise,
         new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))
       ]);
       if (Array.isArray(onWa)) {

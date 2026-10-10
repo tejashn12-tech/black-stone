@@ -19,7 +19,9 @@
               s.indexOf('Quota limit exceeded') !== -1 ||
               s.indexOf('Free daily write units') !== -1 ||
               s.indexOf('free tier database') !== -1 ||
-              (s.indexOf('GrpcConnection') !== -1 && s.indexOf('stream') !== -1)
+              (s.indexOf('GrpcConnection') !== -1 && s.indexOf('stream') !== -1) ||
+              s.indexOf('Timed Out') !== -1 ||
+              s.indexOf('timed out') !== -1
             ) {
               return true;
             }

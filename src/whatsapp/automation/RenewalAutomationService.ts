@@ -11,10 +11,10 @@ export interface RenewalCandidate {
   memberName: string;
   phone: string;
   expiryDate: string;
-  daysLeft: 7 | 3 | 1;
+  daysLeft: number;
   idempotencyKey: string;
   messageText: string;
-  status: 'active' | 'expiring_soon';
+  status: 'active' | 'expiring_soon' | 'expired';
   deliveryState?: 'SUCCESS' | 'PENDING' | 'IN_FLIGHT' | 'UNPROCESSED';
   deliveredAt?: string | null;
 }
@@ -325,8 +325,12 @@ export class RenewalAutomationService {
         : daysLeft === 3
         ? settings.reminder3DayTemplate ||
           "Hi {MEMBER_NAME}, only 3 days left on your {GYM_NAME} membership ({EXPIRY_DATE}). Don't break your workout streak! Visit the front desk or renew via UPI. 🏋️‍♂️"
-        : settings.reminder1DayTemplate ||
-          'FINAL REMINDER: Hi {MEMBER_NAME}, your {GYM_NAME} membership expires tomorrow ({EXPIRY_DATE}). Renew today to keep seamless gym access. ⚡ - Team {GYM_NAME} Mysuru';
+        : daysLeft === 1
+        ? settings.reminder1DayTemplate ||
+          'FINAL REMINDER: Hi {MEMBER_NAME}, your {GYM_NAME} membership expires tomorrow ({EXPIRY_DATE}). Renew today to keep seamless gym access. ⚡ - Team {GYM_NAME} Mysuru'
+        : daysLeft === 0
+        ? 'EXPIRING TODAY: Hi {MEMBER_NAME}, your {GYM_NAME} membership expires today ({EXPIRY_DATE})! Please renew at the front desk or via UPI to keep working out without pause. 🏋️‍♂️💪 - Team {GYM_NAME}'
+        : 'MEMBERSHIP RENEWAL: Hi {MEMBER_NAME}, your {GYM_NAME} membership expired on {EXPIRY_DATE}. We miss you on the training floor! Renew today to reactivate your gym access immediately. ⚡ - {GYM_NAME} Mysuru';
 
     const chosenTemplate = template && template.trim() ? template : fallbackTemplate;
 
@@ -379,7 +383,11 @@ export class RenewalAutomationService {
 
       // 3. Expiry date calculation in Asia/Kolkata
       const daysLeft = this.calculateDaysRemainingInKolkata(member.expiryDate, referenceDate);
-      if (daysLeft !== 7 && daysLeft !== 3 && daysLeft !== 1) {
+      if (daysLeft === null) {
+        continue;
+      }
+      const isEligibleDay = daysLeft === 7 || daysLeft === 3 || daysLeft === 1 || daysLeft === 0 || daysLeft === -1;
+      if (!isEligibleDay) {
         continue;
       }
 
@@ -391,6 +399,9 @@ export class RenewalAutomationService {
         continue;
       }
       if (daysLeft === 1 && settings.enable1DayReminders === false) {
+        continue;
+      }
+      if (daysLeft === -1 && settings.enablePostExpiryReminders === false) {
         continue;
       }
 
@@ -436,7 +447,9 @@ export class RenewalAutomationService {
           ? settings.reminder7DayTemplate
           : daysLeft === 3
           ? settings.reminder3DayTemplate
-          : settings.reminder1DayTemplate;
+          : daysLeft === 1
+          ? settings.reminder1DayTemplate
+          : '';
 
       const messageText = this.formatMessage(template, member, daysLeft, settings);
 
@@ -446,7 +459,7 @@ export class RenewalAutomationService {
         memberName: member.fullName,
         phone,
         expiryDate: member.expiryDate,
-        daysLeft: daysLeft as 7 | 3 | 1,
+        daysLeft,
         idempotencyKey,
         messageText,
         status: statusLower as 'active' | 'expiring_soon',

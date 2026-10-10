@@ -211,7 +211,15 @@ whatsappRoutes.get('/verify-recipient/:phone', async (req: AuthenticatedRequest,
     if (clean.length === 11 && clean.startsWith('0')) clean = `91${clean.slice(1)}`;
     const jid = `${clean}@s.whatsapp.net`;
 
-    const results = await socket.onWhatsApp(jid);
+    let results: any[] = [];
+    try {
+      results = await Promise.race([
+        socket.onWhatsApp(jid).catch(() => []),
+        new Promise<any[]>((resolve) => setTimeout(() => resolve([]), 4000))
+      ]);
+    } catch {
+      results = [];
+    }
     res.json({
       success: true,
       phone,

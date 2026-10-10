@@ -25,6 +25,37 @@ console.error = function (...args: any[]) {
 
 import { initializeFirebaseAdmin } from './config/firebase';
 import { logger } from './utils/logger';
+
+// Gracefully handle unhandled rejections and exceptions (e.g. background WebSocket / Baileys timeouts)
+process.on('unhandledRejection', (reason: any) => {
+  const msg = reason?.message || String(reason);
+  if (
+    msg.includes('Timed Out') ||
+    msg.includes('timeout') ||
+    reason?.output?.statusCode === 408 ||
+    msg.includes('Connection Closed') ||
+    msg.includes('Connection Terminated')
+  ) {
+    logger.warn({ error: msg }, 'Handled background network/gateway timeout safely');
+    return;
+  }
+  logger.warn({ error: msg, stack: reason?.stack }, 'Unhandled rejection caught safely');
+});
+
+process.on('uncaughtException', (err: any) => {
+  const msg = err?.message || String(err);
+  if (
+    msg.includes('Timed Out') ||
+    msg.includes('timeout') ||
+    err?.output?.statusCode === 408 ||
+    msg.includes('Connection Closed')
+  ) {
+    logger.warn({ error: msg }, 'Handled background network/gateway exception safely');
+    return;
+  }
+  logger.error({ error: msg, stack: err?.stack }, 'Uncaught exception caught safely');
+});
+
 import { whatsappRoutes } from './routes/whatsappRoutes';
 import { WhatsAppService } from './whatsapp/WhatsAppService';
 import { RenewalAutomationService } from './whatsapp/automation/RenewalAutomationService';

@@ -695,17 +695,56 @@ export const WhatsAppIntegrationPanel: React.FC = () => {
                 <h2 className="text-xs font-black tracking-widest text-zinc-400 uppercase font-mono">
                   CONNECTION
                 </h2>
-                {status.isServiceUnavailable && (
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
-                    Offline
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5 font-mono">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    ALWAYS CONNECTED (24/7)
                   </span>
-                )}
+                  {status.isServiceUnavailable && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
+                      Offline
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Status Row */}
               <div className="flex items-center gap-3">
                 <span className="text-xs font-semibold text-zinc-400">Status:</span>
                 {renderStatus()}
+              </div>
+            </div>
+
+            {/* Always Connected & Daily Automation Feature Banner */}
+            <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 via-zinc-950/80 to-zinc-900/60 border border-emerald-500/30 space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                    <Zap className="w-3.5 h-3.5" />
+                  </div>
+                  <span className="text-xs font-bold text-emerald-300 tracking-wide uppercase font-mono">
+                    Permanent 24/7 Connection Active
+                  </span>
+                </div>
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono">
+                  NO DAILY LOGIN NEEDED
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-300 leading-relaxed">
+                WhatsApp session stays permanently connected. Automatic keep-alive pinging runs 24/7 and auto-reconnect restores the socket immediately on network drops.
+              </p>
+              <div className="pt-2 border-t border-emerald-500/20 flex items-center justify-between flex-wrap gap-2 text-[11px]">
+                <div className="flex items-center gap-1.5 text-zinc-300">
+                  <Calendar className="w-3.5 h-3.5 text-orange-400" />
+                  <span>Daily Automated WhatsApp:</span>
+                </div>
+                <span className="font-bold text-orange-400 font-mono flex items-center gap-1.5">
+                  <span>Everyday at 9:00 AM IST</span>
+                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">AUTOMATIC</span>
+                </span>
               </div>
             </div>
 
@@ -729,9 +768,9 @@ export const WhatsAppIntegrationPanel: React.FC = () => {
                   <QrCode className="w-6 h-6" />
                 </div>
                 <div className="space-y-1">
-                  <h3 className="text-sm font-bold text-white">WhatsApp Not Connected</h3>
+                  <h3 className="text-sm font-bold text-white">WhatsApp Session Ready</h3>
                   <p className="text-xs text-zinc-400 max-w-sm mx-auto">
-                    Connect WhatsApp to enable transactional member notifications, expiry alerts, and payment receipts.
+                    Pair your device once. Once connected, the Always-Connected engine keeps it active 24/7 so you never have to scan or reconnect every day.
                   </p>
                 </div>
                 <div>
@@ -741,7 +780,7 @@ export const WhatsAppIntegrationPanel: React.FC = () => {
                     className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-black font-extrabold text-xs transition inline-flex items-center gap-2 shadow-lg shadow-emerald-500/20"
                   >
                     <Zap className="w-4 h-4" />
-                    <span>Connect WhatsApp</span>
+                    <span>Connect WhatsApp (Always-On)</span>
                   </button>
                 </div>
               </div>
@@ -876,26 +915,77 @@ export const WhatsAppIntegrationPanel: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Buttons: [ Disconnect ] [ Reconnect ] */}
-                <div className="pt-2 flex flex-wrap items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => handleDisconnect(false)}
-                    disabled={isLoading}
-                    className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-bold text-xs transition flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    <LogOut className="w-4 h-4 text-zinc-400" />
-                    <span>Disconnect</span>
-                  </button>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800/80 space-y-1">
+                    <span className="text-zinc-500 uppercase tracking-wider text-[10px] font-bold">
+                      Session Mode
+                    </span>
+                    <div className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Always Connected (24/7 Active)</span>
+                    </div>
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-zinc-950 border border-zinc-800/80 space-y-1">
+                    <span className="text-zinc-500 uppercase tracking-wider text-[10px] font-bold">
+                      Daily Automatic Dispatch
+                    </span>
+                    <div className="text-xs font-bold text-orange-400 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5" />
+                      <span>Everyday at 9:00 AM IST</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Feedback notice if daily run manually triggered */}
+                {renewalRunFeedback && (
+                  <div className="p-3 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-300 text-xs flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-orange-400 shrink-0" />
+                    <span>{renewalRunFeedback}</span>
+                  </div>
+                )}
+
+                {/* Action Row: [ Disconnect ] [ Reconnect ] [ Run Daily Dispatch Now ] */}
+                <div className="pt-2 space-y-2">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleDisconnect(false)}
+                      disabled={isLoading}
+                      className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-bold text-xs transition flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      <LogOut className="w-4 h-4 text-zinc-400" />
+                      <span>Pause Session</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleReconnect}
+                      disabled={isLoading}
+                      className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-bold text-xs transition flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-4 h-4 text-emerald-400 ${isLoading ? 'animate-spin' : ''}`} />
+                      <span>Refresh Socket</span>
+                    </button>
+                  </div>
 
                   <button
                     type="button"
-                    onClick={handleReconnect}
-                    disabled={isLoading}
-                    className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 font-bold text-xs transition flex items-center justify-center gap-2 disabled:opacity-50"
+                    onClick={handleRunRenewalNow}
+                    disabled={isRunningRenewal}
+                    className="w-full py-2.5 px-4 rounded-xl bg-orange-500/10 hover:bg-orange-500/20 text-orange-300 border border-orange-500/30 font-bold text-xs transition flex items-center justify-center gap-2 disabled:opacity-50"
                   >
-                    <RefreshCw className={`w-4 h-4 text-emerald-400 ${isLoading ? 'animate-spin' : ''}`} />
-                    <span>Reconnect</span>
+                    {isRunningRenewal ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400" />
+                        <span>Dispatching Today's Automated Messages...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-3.5 h-3.5 text-orange-400" />
+                        <span>Run Today's Daily WhatsApp Dispatch Now</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>

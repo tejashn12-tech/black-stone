@@ -103,8 +103,9 @@ export class SocketConnectionManager {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private stableConnectionTimer: NodeJS.Timeout | null = null;
 
-  private readonly MAX_RECONNECT_ATTEMPTS = 6;
+  private readonly MAX_RAPID_RECONNECT_ATTEMPTS = 6;
   private readonly STABLE_THRESHOLD_MS = 10000;
+  private keepAliveTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private authStateManager: AuthStateManager,
@@ -118,6 +119,49 @@ export class SocketConnectionManager {
 
   public isConnected(): boolean {
     return this.statusManager.isConnected() && this.socket !== null;
+  }
+
+  /**
+   * Proactive 24/7 Keep-Alive heartbeat.
+   * Sends presence update every 30 seconds to keep WebSocket and NAT mappings alive,
+   * preventing idle dropouts and ensuring the connection stays alive always.
+   */
+  private startKeepAlivePing(): void {
+    this.clearKeepAlivePing();
+    this.keepAliveTimer = setInterval(() => {
+      if (this.socket && this.statusManager.isConnected()) {
+        try {
+          this.socket.sendPresenceUpdate('available').catch(() => {});
+        } catch {}
+      } else {
+        this.clearKeepAlivePing();
+      }
+    }, 30000);
+  }
+
+  private clearKeepAlivePing(): void {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+    }
+  }
+
+  /**
+   * Proactively triggers auto-reconnect if dropped
+   */
+  public scheduleAutoReconnect(reason = 'always_connected_recovery'): void {
+    if (this.isReconnecting || this.reconnectTimer || this.isConnected()) return;
+    this.reconnectAttempts++;
+    const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(this.reconnectAttempts, 5)));
+    console.log(`[SocketConnectionManager] Always-Connected: scheduling auto-recovery reconnect (${reason}) in ${Math.round(delay / 1000)}s...`);
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      try {
+        await this.connect();
+      } catch (e: any) {
+        console.warn('[SocketConnectionManager] Auto-recovery reconnect notice:', e?.message);
+      }
+    }, delay);
   }
 
   /**
@@ -216,7 +260,9 @@ export class SocketConnectionManager {
 
       // Handle connection updates
       newSocket.ev.on('connection.update', (update: Partial<ConnectionState>) => {
-        this.handleConnectionUpdate(update);
+        this.handleConnectionUpdate(update).catch((err) => {
+          console.warn('[SocketConnectionManager] connection.update async handler notice:', err?.message);
+        });
       });
 
       // Handle initial message frame upserts (server-ack, etc.)
@@ -361,8 +407,9 @@ export class SocketConnectionManager {
         reconnectAttempts: this.reconnectAttempts
       });
 
-      // Mark socket as available to WhatsApp network
+      // Mark socket as available to WhatsApp network and start proactive keep-alive heartbeat
       this.socket?.sendPresenceUpdate('available').catch(() => {});
+      this.startKeepAlivePing();
 
       // Log RECONNECT_SUCCESS if recovered from a drop
       if (wasReconnecting) {
@@ -543,33 +590,27 @@ export class SocketConnectionManager {
           delayMs = baseMs + jitterMs;
           console.log(`[SocketConnectionManager] Stream conflict (440) detected. Backing off ${delayMs}ms to arbitrate stream cleanly...`);
         } else {
-          if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
-            this.isReconnecting = false;
-            this.clearReconnectTimer();
-
-            this.statusManager.transition(
-              'ERROR',
-              `Connection failed after ${this.MAX_RECONNECT_ATTEMPTS} attempts: ${analysis.humanReason}`,
-              {
-                lastError: `Connection lost: ${analysis.humanReason}. Please click Connect to retry.`,
-                reconnectAttempt: this.reconnectAttempts
-              }
-            );
-            return;
-          }
-
           // Increment attempts and calculate exponential backoff with jitter
           this.reconnectAttempts++;
-          const backoff = calculateBackoffWithJitter(this.reconnectAttempts);
-          delayMs = backoff.delayMs;
-          baseMs = backoff.baseMs;
-          jitterMs = backoff.jitterMs;
+          if (this.reconnectAttempts > this.MAX_RAPID_RECONNECT_ATTEMPTS) {
+            // Always-Connected: beyond initial rapid attempts, continue retrying indefinitely
+            // with a steady 30s-45s interval + jitter. User never has to reconnect manually every day.
+            baseMs = 30000;
+            jitterMs = Math.floor(Math.random() * 15000);
+            delayMs = baseMs + jitterMs;
+            console.log(`[SocketConnectionManager] Always-Connected: attempt ${this.reconnectAttempts}. Retrying in ${Math.round(delayMs / 1000)}s...`);
+          } else {
+            const backoff = calculateBackoffWithJitter(this.reconnectAttempts);
+            delayMs = backoff.delayMs;
+            baseMs = backoff.baseMs;
+            jitterMs = backoff.jitterMs;
+          }
         }
 
         // Log RECONNECT_STARTED
         logWhatsAppEvent(WhatsAppLogEvent.RECONNECT_STARTED, {
           attempt: this.reconnectAttempts,
-          maxAttempts: this.MAX_RECONNECT_ATTEMPTS,
+          maxAttempts: 'unlimited_always_connected',
           delayMs,
           baseMs,
           jitterMs,
@@ -581,7 +622,7 @@ export class SocketConnectionManager {
         // State Machine: CONNECTED → RECONNECTING
         const reconnectMessage = analysis.isImmediateRestart
           ? 'Restarting socket for synchronized session keys...'
-          : `[${analysis.category}] ${analysis.humanReason} Retrying in ${(delayMs / 1000).toFixed(1)}s (Attempt ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})`;
+          : `[${analysis.category}] ${analysis.humanReason} Retrying in ${(delayMs / 1000).toFixed(1)}s (Always-Connected Attempt ${this.reconnectAttempts})`;
 
         this.statusManager.transition(
           'RECONNECTING',
@@ -602,12 +643,16 @@ export class SocketConnectionManager {
         this.isReconnecting = true;
         this.reconnectTimer = setTimeout(async () => {
           this.reconnectTimer = null;
-          console.log(`[SocketConnectionManager] Executing reconnect (${analysis.isImmediateRestart ? 'Immediate 515 restart' : `Attempt ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS}`})...`);
+          console.log(`[SocketConnectionManager] Executing reconnect (${analysis.isImmediateRestart ? 'Immediate 515 restart' : `Always-Connected Attempt ${this.reconnectAttempts}`})...`);
           try {
             await this.authStateManager.waitForPendingCredsSave();
             await this.connect();
           } catch (reconnErr: any) {
-            console.error('[SocketConnectionManager] Reconnection attempt failed:', reconnErr?.message);
+            console.error('[SocketConnectionManager] Reconnection attempt notice:', reconnErr?.message);
+            // If connection attempt caught an error before close handler, schedule next retry safely
+            if (!this.reconnectTimer && !this.isManualDisconnect && !this.isExplicitLogout) {
+              this.scheduleAutoReconnect('continuous_retry');
+            }
           }
         }, delayMs);
       } else {
@@ -685,6 +730,7 @@ export class SocketConnectionManager {
   }
 
   private destroyCurrentSocket(): void {
+    this.clearKeepAlivePing();
     if (this.socket) {
       const sock = this.socket;
       this.socket = null;
