@@ -56,7 +56,7 @@ export class AuthStateManager {
     this.vaultDocId = getWhatsAppVaultDocId(this.sessionVault);
 
     // Validate that document matches environment
-    validateVaultDocAccess(this.vaultDocId);
+    validateVaultDocAccess(this.vaultDocId, this.environment);
 
     // For development, maintain EXACT existing 'storage/whatsapp-session' so AI Studio connection is 100% untouched
     if (customSessionPath || process.env.WHATSAPP_SESSION_PATH) {
@@ -243,7 +243,7 @@ export class AuthStateManager {
    */
   private async restoreFromPrivateServerVault(): Promise<boolean> {
     try {
-      validateVaultDocAccess(this.vaultDocId);
+      validateVaultDocAccess(this.vaultDocId, this.environment);
       const db = getAdminDb();
       if (!db) return false;
 
@@ -291,7 +291,7 @@ export class AuthStateManager {
    */
   private async syncToPrivateServerVault(): Promise<void> {
     try {
-      validateVaultDocAccess(this.vaultDocId);
+      validateVaultDocAccess(this.vaultDocId, this.environment);
       if (!this.hasLocalSession()) return;
 
       const db = getAdminDb();
@@ -356,7 +356,7 @@ export class AuthStateManager {
    */
   public async clearAuthSession(): Promise<void> {
     try {
-      validateVaultDocAccess(this.vaultDocId);
+      validateVaultDocAccess(this.vaultDocId, this.environment);
 
       // 1. Purge local directory
       if (fs.existsSync(this.sessionDir)) {
@@ -407,7 +407,7 @@ export class AuthStateManager {
       return false;
     }
 
-    validateVaultDocAccess(PROD_VAULT_DOC_ID);
+    validateVaultDocAccess(PROD_VAULT_DOC_ID, 'production');
 
     try {
       // 1. Clear local production session directory

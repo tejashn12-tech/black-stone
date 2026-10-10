@@ -24,7 +24,19 @@ export const PROD_VAULT_DOC_ID = 'bsf_whatsapp_session_prod';
  * Determines the server environment without relying on frontend input.
  */
 export function getWhatsAppEnvironment(): WhatsAppEnvironment {
-  // Explicit override if configured
+  // Cloud Run & AI Studio detection:
+  // In AI Studio preview containers, K_SERVICE begins with 'ais-' or AUTHORIZED_SERVICE_ACCOUNT_EMAIL contains 'ais-sandbox'.
+  // AI Studio preview containers are ALWAYS development and must always use development session vault (bsf_whatsapp_session_dev).
+  const kService = process.env.K_SERVICE || '';
+  const isAiStudio =
+    kService.startsWith('ais-') ||
+    Boolean(process.env.AUTHORIZED_SERVICE_ACCOUNT_EMAIL?.includes('ais-sandbox'));
+
+  if (isAiStudio) {
+    return 'development';
+  }
+
+  // Explicit override if configured in external deployment
   if (process.env.WHATSAPP_ENVIRONMENT === 'production' || process.env.WHATSAPP_ENV === 'production') {
     return 'production';
   }
@@ -32,15 +44,7 @@ export function getWhatsAppEnvironment(): WhatsAppEnvironment {
     return 'development';
   }
 
-  // Cloud Run detection:
-  // In Google Cloud Run production, K_SERVICE is set to the service name (e.g. 'black-stone-fitness-bsf-mysuru').
-  // In AI Studio preview containers, K_SERVICE begins with 'ais-' or AUTHORIZED_SERVICE_ACCOUNT_EMAIL contains 'ais-sandbox'.
-  const kService = process.env.K_SERVICE || '';
-  const isAiStudio =
-    kService.startsWith('ais-') ||
-    Boolean(process.env.AUTHORIZED_SERVICE_ACCOUNT_EMAIL?.includes('ais-sandbox'));
-
-  if (!isAiStudio && (kService.length > 0 || process.env.NODE_ENV === 'production')) {
+  if (kService.length > 0 || process.env.NODE_ENV === 'production') {
     return 'production';
   }
 
@@ -81,8 +85,8 @@ export function getWhatsAppVaultDocId(requestedVault?: WhatsAppSessionVault): st
 /**
  * Validates that an arbitrary document path does not violate environment boundaries.
  */
-export function validateVaultDocAccess(docId: string): void {
-  const currentEnv = getWhatsAppEnvironment();
+export function validateVaultDocAccess(docId: string, expectedEnv?: WhatsAppEnvironment): void {
+  const currentEnv = expectedEnv || getWhatsAppEnvironment();
 
   if (currentEnv === 'production' && docId === DEV_VAULT_DOC_ID) {
     throw new Error(

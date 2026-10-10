@@ -62,14 +62,18 @@ function markQuotaExhausted(err?: any) {
   logger.info({ reason: err?.message || 'Quota limit exceeded' }, 'Server Firestore write quota limit reached; operating in safe read-only/in-memory mode');
 }
 
-const hasServiceAccount = Boolean(
-  process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY
-);
+function checkHasServiceAccount(): boolean {
+  return Boolean(
+    process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY
+  );
+}
 
 export function initializeFirebaseAdmin(): { app: AdminApp; auth: AdminAuth; db: any } {
   if (adminApp && adminAuth && (adminDb || webDbAdapter)) {
     return { app: adminApp, auth: adminAuth, db: getAdminDb() };
   }
+
+  const hasServiceAccount = checkHasServiceAccount();
 
   const existingAdminApps = getAdminApps();
   const projectId =

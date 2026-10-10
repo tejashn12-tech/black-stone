@@ -18,10 +18,34 @@ import { CookieConsentBanner } from './components/common/CookieConsentBanner';
 import { MembershipPackage } from './types';
 import { Loader2 } from 'lucide-react';
 
+// Robust lazy loader that retries dynamically imported modules if connection drops or chunks refresh
+function lazyWithRetry<T extends React.ComponentType<any>>(
+  factory: () => Promise<{ default: T }>,
+  retries = 2,
+  interval = 600
+) {
+  return lazy(() =>
+    new Promise<{ default: T }>((resolve, reject) => {
+      function attempt(remaining: number) {
+        factory()
+          .then(resolve)
+          .catch((error) => {
+            if (remaining > 0) {
+              setTimeout(() => attempt(remaining - 1), interval);
+            } else {
+              reject(error);
+            }
+          });
+      }
+      attempt(retries);
+    })
+  );
+}
+
 // Lazy load heavy components to drastically reduce initial JS load
-const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
-const ExerciseLibrary = lazy(() => import('./components/exercises/ExerciseLibrary').then(m => ({ default: m.ExerciseLibrary })));
-const CalculatorsHub = lazy(() => import('./components/calculators/CalculatorsHub').then(m => ({ default: m.CalculatorsHub })));
+const AdminDashboard = lazyWithRetry(() => import('./components/admin/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
+const ExerciseLibrary = lazyWithRetry(() => import('./components/exercises/ExerciseLibrary').then(m => ({ default: m.ExerciseLibrary })));
+const CalculatorsHub = lazyWithRetry(() => import('./components/calculators/CalculatorsHub').then(m => ({ default: m.CalculatorsHub })));
 
 const MainAppContent: React.FC = () => {
   const { isAdminAuthenticated } = useGym();

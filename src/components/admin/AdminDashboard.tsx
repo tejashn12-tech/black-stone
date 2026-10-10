@@ -1,19 +1,71 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
+import {
+  LayoutDashboard,
+  Users,
+  CreditCard,
+  UserPlus,
+  Award,
+  Package,
+  Settings,
+  LogOut,
+  ChevronRight,
+  ShieldCheck,
+  Globe,
+  Bell,
+  Sparkles,
+  ExternalLink,
+  ShieldAlert,
+  Shield,
+  Search,
+  Plus,
+  Clock,
+  Menu,
+  X,
+  MessageSquare,
+  Database,
+  CheckCircle2,
+  RefreshCw,
+  Loader2
+} from 'lucide-react';
 import { useGym } from '../../context/GymContext';
 import { BSFLogo } from '../common/BSFLogo';
 import { DashboardOverview } from './DashboardOverview';
 import { DeskCommandPalette } from './DeskCommandPalette';
 import { getEffectiveMemberStatus } from '../../utils/memberStatus';
 
+// Resilient lazy loader that retries tab module imports if temporary network or rebuild occurs
+function lazyWithRetry<T extends React.ComponentType<any>>(
+  factory: () => Promise<{ default: T }>,
+  retries = 2,
+  interval = 500
+) {
+  return lazy(() =>
+    new Promise<{ default: T }>((resolve, reject) => {
+      function attempt(remaining: number) {
+        factory()
+          .then(resolve)
+          .catch((error) => {
+            if (remaining > 0) {
+              setTimeout(() => attempt(remaining - 1), interval);
+            } else {
+              reject(error);
+            }
+          });
+      }
+      attempt(retries);
+    })
+  );
+}
+
 // Lazy load heavy admin tabs to dramatically cut initial bundle and speed up initial render
-const MemberManagement = lazy(() => import('./MemberManagement').then(m => ({ default: m.MemberManagement })));
-const PaymentManagement = lazy(() => import('./PaymentManagement').then(m => ({ default: m.PaymentManagement })));
-const EnquiryManagement = lazy(() => import('./EnquiryManagement').then(m => ({ default: m.EnquiryManagement })));
-const TrainerManagement = lazy(() => import('./TrainerManagement').then(m => ({ default: m.TrainerManagement })));
-const PackageManagement = lazy(() => import('./PackageManagement').then(m => ({ default: m.PackageManagement })));
-const SettingsPanel = lazy(() => import('./SettingsPanel').then(m => ({ default: m.SettingsPanel })));
-const DPDPComplianceHub = lazy(() => import('./DPDPComplianceHub').then(m => ({ default: m.DPDPComplianceHub })));
-const WhatsAppIntegrationPanel = lazy(() => import('./WhatsAppIntegrationPanel').then(m => ({ default: m.WhatsAppIntegrationPanel })));
+const MemberManagement = lazyWithRetry(() => import('./MemberManagement').then(m => ({ default: m.MemberManagement })));
+const PaymentManagement = lazyWithRetry(() => import('./PaymentManagement').then(m => ({ default: m.PaymentManagement })));
+const EnquiryManagement = lazyWithRetry(() => import('./EnquiryManagement').then(m => ({ default: m.EnquiryManagement })));
+const TrainerManagement = lazyWithRetry(() => import('./TrainerManagement').then(m => ({ default: m.TrainerManagement })));
+const PackageManagement = lazyWithRetry(() => import('./PackageManagement').then(m => ({ default: m.PackageManagement })));
+const SettingsPanel = lazyWithRetry(() => import('./SettingsPanel').then(m => ({ default: m.SettingsPanel })));
+const DPDPComplianceHub = lazyWithRetry(() => import('./DPDPComplianceHub').then(m => ({ default: m.DPDPComplianceHub })));
+const WhatsAppIntegrationPanel = lazyWithRetry(() => import('./WhatsAppIntegrationPanel').then(m => ({ default: m.WhatsAppIntegrationPanel })));
 
 // Isolated live clock component to prevent forcing full AdminDashboard re-renders every 1000ms
 const LiveClock: React.FC = React.memo(() => {
@@ -46,34 +98,6 @@ const LiveClock: React.FC = React.memo(() => {
 
   return <span className="text-zinc-300 font-semibold">{timeStr}</span>;
 });
-import {
-  LayoutDashboard,
-  Users,
-  CreditCard,
-  UserPlus,
-  Award,
-  Package,
-  Settings,
-  LogOut,
-  ChevronRight,
-  ShieldCheck,
-  Globe,
-  Bell,
-  Sparkles,
-  ExternalLink,
-  ShieldAlert,
-  Shield,
-  Search,
-  Plus,
-  Clock,
-  Menu,
-  X,
-  MessageSquare,
-  Database,
-  CheckCircle2,
-  RefreshCw,
-  Loader2
-} from 'lucide-react';
 
 interface AdminDashboardProps {
   onBackToPublicSite: () => void;

@@ -2,6 +2,9 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import dotenv from 'dotenv';
+
+dotenv.config();
+
 import { createServer as createViteServer } from 'vite';
 
 // Suppress internal libsignal session retry noise (Bad MAC / failed to decrypt)
@@ -27,11 +30,9 @@ import { WhatsAppService } from './whatsapp/WhatsAppService';
 import { RenewalAutomationService } from './whatsapp/automation/RenewalAutomationService';
 import { getWhatsAppEnvironment, getWhatsAppSessionVault } from './whatsapp/environment';
 
-dotenv.config();
-
 const app = express();
-// Port 3000 is required by the AI Studio environment (reverse proxy runs on 8080)
-const PORT = 3000;
+// Port 3000 is required by the AI Studio environment; in external hosting, use the hosting provider's PORT
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Initialize Firebase Admin SDK
 try {
@@ -155,6 +156,9 @@ app.use((err: any, _req: express.Request, res: express.Response, next: express.N
 
 // Start server with Vite middleware in development or static serve in production
 async function startServer() {
+  const publicPath = path.join(process.cwd(), 'public');
+  app.use(express.static(publicPath));
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },

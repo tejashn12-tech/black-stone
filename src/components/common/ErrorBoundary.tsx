@@ -21,6 +21,18 @@ export class ErrorBoundary extends Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.warn('UI component boundary captured error:', error, errorInfo);
+    // If a chunk load failed due to cache mismatch or dev server restart, do a single auto-refresh
+    if (
+      typeof window !== 'undefined' &&
+      (error?.message?.includes('Failed to fetch dynamically imported module') ||
+       error?.message?.includes('dynamically imported module'))
+    ) {
+      const hasAutoReloaded = sessionStorage.getItem('bsf_chunk_reload');
+      if (!hasAutoReloaded) {
+        sessionStorage.setItem('bsf_chunk_reload', 'true');
+        window.location.reload();
+      }
+    }
   }
 
   public render() {
@@ -34,6 +46,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </p>
             <button
               onClick={() => {
+                sessionStorage.removeItem('bsf_chunk_reload');
                 this.setState({ hasError: false, error: null });
                 window.location.reload();
               }}

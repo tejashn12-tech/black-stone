@@ -30,21 +30,20 @@ export const BSFLogo: React.FC<BSFLogoProps> = ({
 
   return (
     <div className={`flex items-center gap-2.5 select-none ${className}`} id="bsf-brand-logo">
-      {/* Monogram Shield */}
-      <div className={`relative ${current.icon} rounded-xl bg-gradient-to-br from-zinc-800 via-zinc-900 to-black p-[1px] shadow-lg shadow-orange-500/20 border border-zinc-700/60 flex items-center justify-center group`}>
-        <div className="w-full h-full bg-zinc-950 rounded-[11px] flex items-center justify-center relative overflow-hidden">
-          {/* Subtle background angular lines */}
-          <div className="absolute inset-0 opacity-20 bg-[linear-gradient(45deg,transparent_25%,rgba(249,115,22,0.2)_50%,transparent_75%)] bg-[length:250%_250%] animate-pulse" />
-          
-          <div className="flex items-center justify-center font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-orange-400 via-orange-300 to-orange-500 font-display">
-            <span className={size === 'sm' ? 'text-xs' : size === 'md' ? 'text-base' : size === 'lg' ? 'text-2xl' : 'text-3xl'}>
-              BSF
-            </span>
-          </div>
-
-          {/* Micro corner accent */}
-          <div className="absolute bottom-0 right-0 w-1.5 h-1.5 bg-orange-500 rounded-tl-sm opacity-90" />
-        </div>
+      {/* Emblem Logo Badge */}
+      <div className={`relative ${current.icon} rounded-full flex-shrink-0 shadow-lg shadow-orange-500/25 border border-orange-500/60 hover:border-orange-400 transition-all duration-300 flex items-center justify-center group bg-zinc-950 overflow-hidden ring-1 ring-orange-500/20`}>
+        <img
+          src="/black_stone_fitness_emblem.svg"
+          alt="Black Stone Fitness Logo Emblem"
+          className="w-full h-full object-contain select-none group-hover:scale-105 transition-transform duration-300 rounded-full"
+          loading="eager"
+          onError={(e) => {
+            const target = e.currentTarget;
+            if (target.src.indexOf('/favicon.svg') === -1) {
+              target.src = '/favicon.svg';
+            }
+          }}
+        />
       </div>
 
       {/* Brand Text */}
