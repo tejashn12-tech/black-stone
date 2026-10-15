@@ -224,6 +224,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  const todayBirthdays = React.useMemo(() => {
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const targetMMDD = `${mm}-${dd}`;
+
+    return members.filter(m => {
+      const rawDob = m.dob || (m as any).dateOfBirth || (m as any).birthDate;
+      if (!rawDob || typeof rawDob !== 'string') return false;
+      const parts = rawDob.trim().split(/[-/.]/);
+      if (parts.length === 3) {
+        let mStr = '';
+        let dStr = '';
+        if (parts[0].length === 4) {
+          mStr = parts[1].padStart(2, '0');
+          dStr = parts[2].padStart(2, '0');
+        } else if (parts[2].length === 4) {
+          dStr = parts[0].padStart(2, '0');
+          mStr = parts[1].padStart(2, '0');
+        } else {
+          mStr = parts[1].padStart(2, '0');
+          dStr = parts[2].padStart(2, '0');
+        }
+        return `${mStr}-${dStr}` === targetMMDD;
+      }
+      return false;
+    });
+  }, [members]);
+
   const expiringCount = members.filter(m => getEffectiveMemberStatus(m) === 'expiring_soon').length;
   const newLeadsCount = enquiries.filter(e => e.status === 'New Lead' || e.status === 'Follow-up Required').length;
   const pendingDSRCount = dataSubjectRequests.filter(d => d.status === 'pending' || d.status === 'in_progress').length;
@@ -266,8 +295,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       id: 'whatsapp' as AdminTab,
       label: 'WhatsApp Gateway',
       icon: MessageSquare,
-      badge: whatsAppSession.status === 'connected' ? 'Active' : whatsAppSession.status === 'connecting' ? 'Connecting' : null,
-      badgeColor: whatsAppSession.status === 'connected' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+      badge: todayBirthdays.length > 0
+        ? `🎂 ${todayBirthdays.length} Birthday${todayBirthdays.length > 1 ? 's' : ''}`
+        : whatsAppSession.status === 'connected'
+        ? 'Active'
+        : whatsAppSession.status === 'connecting'
+        ? 'Connecting'
+        : null,
+      badgeColor: todayBirthdays.length > 0
+        ? 'bg-amber-400 text-black font-black'
+        : whatsAppSession.status === 'connected'
+        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+        : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
     },
     {
       id: 'trainers' as AdminTab,
@@ -515,6 +554,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Daily Birthday Notification Banner in main#bsf-admin-main-content */}
+        {todayBirthdays.length > 0 && (
+          <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-amber-950/40 via-orange-950/30 to-zinc-900 border border-amber-500/30 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl shrink-0 border border-amber-500/30">
+                🎂
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-black text-amber-300 uppercase tracking-wider font-mono">
+                    TODAY'S BIRTHDAYS ({todayBirthdays.length})
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    Auto-Wish Active (Without Fail)
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-200 font-medium mt-0.5">
+                  Celebrating today: <span className="font-bold text-white">{todayBirthdays.map(m => m.fullName).join(', ')}</span>
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveTab('whatsapp')}
+              className="self-start sm:self-auto px-3.5 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-bold transition flex items-center gap-2"
+            >
+              <span>View WhatsApp Automation</span>
+            </button>
+          </div>
+        )}
 
         {/* Dynamic Sub-Component based on active tab with Suspense code-splitting */}
         <Suspense fallback={

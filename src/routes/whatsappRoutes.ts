@@ -1119,8 +1119,10 @@ whatsappRoutes.post('/automations/run', async (req: AuthenticatedRequest, res: R
       membershipId: it.membershipId || it.memberId || it.id,
       memberName: it.memberName || it.fullName || 'Member',
       phone: it.phone,
-      daysLeft: it.daysLeft ?? it.days ?? 7,
-      message: it.message || `Renewal reminder: ${it.daysLeft ?? it.days ?? 7} days remaining.`
+      type: it.type || (it.messageType === 'birthday' ? 'birthday' : 'renewal'),
+      daysLeft: it.daysLeft ?? it.days ?? 0,
+      message: it.message || (it.type === 'birthday' ? 'Happy Birthday!' : `Renewal reminder: ${it.daysLeft ?? it.days ?? 7} days remaining.`),
+      idempotencyKey: it.idempotencyKey
     }));
 
     summary.totalCandidates = candidates.length;
@@ -1128,14 +1130,16 @@ whatsappRoutes.post('/automations/run', async (req: AuthenticatedRequest, res: R
     // Process each candidate through the idempotent message pipeline
     for (const item of candidates) {
       const membershipId = item.membershipId || item.memberId;
-      // Exact required pattern: {membershipId}:renewal:{daysLeft}
-      const idempotencyKey = `${membershipId}:renewal:${item.daysLeft}`;
+      const isBday = item.type === 'birthday';
+      const idempotencyKey = item.idempotencyKey || (isBday
+        ? `${membershipId}:birthday:${new Date().getFullYear()}`
+        : `${membershipId}:renewal:${item.daysLeft}`);
 
       try {
         const result = await whatsappService.sendMessage({
           to: item.phone,
           text: item.message,
-          type: 'expiry_reminder',
+          type: isBday ? 'birthday' : 'expiry_reminder',
           recipientName: item.memberName,
           memberId: item.memberId,
           idempotencyKey

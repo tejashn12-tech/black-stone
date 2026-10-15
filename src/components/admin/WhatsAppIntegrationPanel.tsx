@@ -736,15 +736,27 @@ export const WhatsAppIntegrationPanel: React.FC = () => {
               <p className="text-[11px] text-zinc-300 leading-relaxed">
                 WhatsApp session stays permanently connected. Automatic keep-alive pinging runs 24/7 and auto-reconnect restores the socket immediately on network drops.
               </p>
-              <div className="pt-2 border-t border-emerald-500/20 flex items-center justify-between flex-wrap gap-2 text-[11px]">
-                <div className="flex items-center gap-1.5 text-zinc-300">
-                  <Calendar className="w-3.5 h-3.5 text-orange-400" />
-                  <span>Daily Automated WhatsApp:</span>
+              <div className="pt-2 border-t border-emerald-500/20 flex flex-col gap-1.5 text-[11px]">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 text-zinc-300">
+                    <Calendar className="w-3.5 h-3.5 text-orange-400" />
+                    <span>Daily Automated WhatsApp:</span>
+                  </div>
+                  <span className="font-bold text-orange-400 font-mono flex items-center gap-1.5">
+                    <span>Everyday at 9:00 AM IST</span>
+                    <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">AUTOMATIC</span>
+                  </span>
                 </div>
-                <span className="font-bold text-orange-400 font-mono flex items-center gap-1.5">
-                  <span>Everyday at 9:00 AM IST</span>
-                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded border border-emerald-500/20">AUTOMATIC</span>
-                </span>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 text-zinc-300">
+                    <span className="text-xs">🎂</span>
+                    <span>Daily Birthday Wish Automation:</span>
+                  </div>
+                  <span className="font-bold text-emerald-400 font-mono flex items-center gap-1">
+                    <span>Active Without Fail</span>
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400 inline" />
+                  </span>
+                </div>
               </div>
             </div>
 

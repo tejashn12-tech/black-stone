@@ -2,16 +2,18 @@ import { WhatsAppService } from '../WhatsAppService';
 import { getAdminDb, isQuotaExhaustedError } from '../../config/firebase';
 import { IdempotencyManager } from '../idempotency/IdempotencyManager';
 import { GymSettings, Member } from '../../types';
-import { INITIAL_SETTINGS } from '../../data/initialData';
+import { INITIAL_SETTINGS, INITIAL_MEMBERS } from '../../data/initialData';
 import { logger } from '../../utils/logger';
 
 export interface RenewalCandidate {
+  type?: 'renewal' | 'birthday';
   memberId: string;
   membershipId: string;
   memberName: string;
   phone: string;
-  expiryDate: string;
-  daysLeft: number;
+  expiryDate?: string;
+  daysLeft?: number;
+  dob?: string;
   idempotencyKey: string;
   messageText: string;
   status: 'active' | 'expiring_soon' | 'expired';
@@ -33,12 +35,15 @@ export interface RenewalRunSummary {
   inFlightCount: number;
   failedCount: number;
   disconnectedSkippedCount: number;
+  birthdaysCount?: number;
+  birthdaysSentCount?: number;
   details: Array<{
     idempotencyKey: string;
     memberId: string;
     memberName: string;
     phone: string;
-    daysLeft: number;
+    daysLeft?: number;
+    type?: 'renewal' | 'birthday';
     action: 'sent' | 'duplicate_prevented' | 'in_flight' | 'failed' | 'disconnected_queued' | 'skipped_criteria';
     reason?: string;
   }>;
@@ -282,30 +287,75 @@ export class RenewalAutomationService {
   }
 
   /**
-   * Loads all active members from Firestore
+   * Loads all active members from Firestore or memory fallback
    */
   public async loadMembers(): Promise<Member[]> {
     const db = getAdminDb();
-    if (!db) {
-      return [];
-    }
-
-    try {
-      const snap = await db.collection('members').get();
-      if (!snap || !snap.docs) {
-        return [];
+    if (db) {
+      try {
+        const snap = await db.collection('members').get();
+        if (snap && snap.docs && snap.docs.length > 0) {
+          return snap.docs.map((doc) => {
+            const data = doc.data();
+            return {
+              ...data,
+              id: data.id || doc.id
+            } as Member;
+          });
+        }
+      } catch (err: any) {
+        logger.warn({ reason: err?.message }, '[RenewalAutomation] Notice reading members collection, using fallback');
       }
-      return snap.docs.map((doc) => {
-        const data = doc.data();
-        return {
-          ...data,
-          id: data.id || doc.id
-        } as Member;
-      });
-    } catch (err: any) {
-      logger.warn({ reason: err?.message }, '[RenewalAutomation] Notice reading members collection');
-      return [];
     }
+    return INITIAL_MEMBERS;
+  }
+
+  /**
+   * Evaluates if a member's date of birth matches the current calendar month and day
+   * in Asia/Kolkata timezone. Handles YYYY-MM-DD, DD-MM-YYYY, YYYY/MM/DD formats.
+   */
+  public isBirthdayToday(dobStr: string | undefined | null, targetMonth: number, targetDay: number): boolean {
+    if (!dobStr || typeof dobStr !== 'string') return false;
+    const clean = dobStr.trim();
+    if (!clean) return false;
+    const parts = clean.split(/[-/.]/);
+    if (parts.length === 3) {
+      let m = 0;
+      let d = 0;
+      if (parts[0].length === 4) {
+        // YYYY-MM-DD
+        m = parseInt(parts[1], 10);
+        d = parseInt(parts[2], 10);
+      } else if (parts[2].length === 4) {
+        // DD-MM-YYYY
+        d = parseInt(parts[0], 10);
+        m = parseInt(parts[1], 10);
+      } else {
+        m = parseInt(parts[1], 10);
+        d = parseInt(parts[2], 10);
+      }
+      return m === targetMonth && d === targetDay;
+    }
+    return false;
+  }
+
+  /**
+   * Formats the personalized birthday wish message template
+   */
+  public formatBirthdayMessage(
+    template: string | undefined | null,
+    member: Member,
+    settings: GymSettings
+  ): string {
+    const gymName = settings.gymName || 'Black Stone Fitness';
+    const fallbackTemplate =
+      settings.birthdayTemplate ||
+      '🎉 Happy Birthday, {MEMBER_NAME}! 🎂 The entire Black Stone Fitness family wishes you a healthy, strong, and powerhouse year ahead. Keep crushing your goals! 💪🔥 — Team {GYM_NAME} Mysuru';
+    const chosenTemplate = template && template.trim() ? template : fallbackTemplate;
+
+    return chosenTemplate
+      .replace(/{MEMBER_NAME}/gi, member.fullName || 'Member')
+      .replace(/{GYM_NAME}/gi, gymName);
   }
 
   /**
@@ -342,7 +392,7 @@ export class RenewalAutomationService {
   }
 
   /**
-   * Identifies all eligible renewal candidates for today in Asia/Kolkata
+   * Identifies all eligible renewal and birthday candidates for today in Asia/Kolkata
    */
   public async findEligibleCandidates(
     customDateStr?: string
@@ -361,8 +411,61 @@ export class RenewalAutomationService {
     let activeMembersCount = 0;
 
     for (const member of members) {
-      // 1. Membership must be active
       const statusLower = (member.status || '').toLowerCase();
+      const phone = member.whatsapp || member.phone;
+      const membershipId = member.packageId || member.memberCode || member.id;
+
+      // -------------------------------------------------------------
+      // 1. DAILY BIRTHDAY CHECK (Evaluated daily without fail)
+      // -------------------------------------------------------------
+      const rawDob = member.dob || (member as any).dateOfBirth || (member as any).birthDate;
+      const isBdayToday = this.isBirthdayToday(rawDob, kolkataToday.month, kolkataToday.day);
+      if (isBdayToday && phone && this.isValidPhoneNumber(phone)) {
+        // Active by default unless member specifically opted out
+        const isBdayOptedOut = member.automationOverrides?.birthdayWish === false;
+        if (!isBdayOptedOut) {
+          const bdayIdempotencyKey = `${member.id}:birthday:${kolkataToday.year}`;
+          const existingBdayRecord = await this.idempotencyManager.getRecord(bdayIdempotencyKey);
+          let bdayDeliveryState: 'SUCCESS' | 'PENDING' | 'IN_FLIGHT' | 'UNPROCESSED' = 'UNPROCESSED';
+          let bdayDeliveredAt: string | null = null;
+
+          if (existingBdayRecord) {
+            if (existingBdayRecord.status === 'SUCCESS') {
+              bdayDeliveryState = 'SUCCESS';
+              bdayDeliveredAt = existingBdayRecord.completedAt || existingBdayRecord.updatedAt;
+            } else if (existingBdayRecord.status === 'PENDING') {
+              const now = Date.now();
+              if (existingBdayRecord.lockedUntil && existingBdayRecord.lockedUntil > now) {
+                bdayDeliveryState = 'IN_FLIGHT';
+              } else {
+                bdayDeliveryState = 'PENDING';
+              }
+            }
+          }
+
+          const bdayMessage = this.formatBirthdayMessage(settings.birthdayTemplate, member, settings);
+
+          candidates.push({
+            type: 'birthday',
+            memberId: member.id,
+            membershipId,
+            memberName: member.fullName,
+            phone,
+            dob: rawDob,
+            daysLeft: 0,
+            idempotencyKey: bdayIdempotencyKey,
+            messageText: bdayMessage,
+            status: (statusLower === 'active' || statusLower === 'expiring_soon') ? statusLower : 'expired',
+            deliveryState: bdayDeliveryState,
+            deliveredAt: bdayDeliveredAt
+          });
+        }
+      }
+
+      // -------------------------------------------------------------
+      // 2. MEMBERSHIP EXPIRY / RENEWAL CHECK
+      // -------------------------------------------------------------
+      // 1. Membership must be active
       const isActive = statusLower === 'active' || statusLower === 'expiring_soon';
       if (!isActive) {
         continue;
@@ -376,7 +479,6 @@ export class RenewalAutomationService {
       activeMembersCount++;
 
       // 2. Member must have a valid phone number
-      const phone = member.whatsapp || member.phone;
       if (!this.isValidPhoneNumber(phone)) {
         continue;
       }
@@ -420,7 +522,6 @@ export class RenewalAutomationService {
       }
 
       // 6. Check existing delivery and idempotency record
-      const membershipId = member.packageId || member.memberCode || member.id;
       const idempotencyKey = `${member.id}:renewal:${daysLeft}`;
 
       const existingRecord = await this.idempotencyManager.getRecord(idempotencyKey);
@@ -454,6 +555,7 @@ export class RenewalAutomationService {
       const messageText = this.formatMessage(template, member, daysLeft, settings);
 
       candidates.push({
+        type: 'renewal',
         memberId: member.id,
         membershipId,
         memberName: member.fullName,
@@ -589,6 +691,7 @@ export class RenewalAutomationService {
             memberName: c.memberName,
             phone: c.phone,
             daysLeft: c.daysLeft,
+            type: c.type || 'renewal',
             action: 'skipped_criteria',
             reason: 'Dry-run preview mode'
           });
@@ -608,6 +711,7 @@ export class RenewalAutomationService {
             memberName: candidate.memberName,
             phone: candidate.phone,
             daysLeft: candidate.daysLeft,
+            type: candidate.type || 'renewal',
             action: 'duplicate_prevented',
             reason: `Already delivered successfully on ${candidate.deliveredAt || 'today'} (idempotency preserved)`
           });
@@ -625,6 +729,7 @@ export class RenewalAutomationService {
             memberName: candidate.memberName,
             phone: candidate.phone,
             daysLeft: candidate.daysLeft,
+            type: candidate.type || 'renewal',
             action: 'disconnected_queued',
             reason: 'WhatsApp socket is currently disconnected; queued for retry upon connection restoration'
           });
@@ -642,10 +747,11 @@ export class RenewalAutomationService {
         }
 
         try {
+          const isBday = candidate.type === 'birthday';
           const sendResult = await this.whatsappService.sendMessage({
             to: candidate.phone,
             text: candidate.messageText,
-            type: 'expiry_reminder',
+            type: isBday ? 'birthday' : 'expiry_reminder',
             recipientName: candidate.memberName,
             memberId: candidate.memberId,
             idempotencyKey: candidate.idempotencyKey
@@ -659,19 +765,28 @@ export class RenewalAutomationService {
               memberName: candidate.memberName,
               phone: candidate.phone,
               daysLeft: candidate.daysLeft,
+              type: candidate.type || 'renewal',
               action: 'duplicate_prevented',
-              reason: 'Already sent successfully in a previous dispatch (idempotency enforced)'
+              reason: isBday
+                ? 'Birthday wish already sent for this calendar year (idempotency enforced)'
+                : 'Already sent successfully in a previous dispatch (idempotency enforced)'
             });
           } else {
             summary.sentCount++;
+            if (isBday) {
+              summary.birthdaysSentCount = (summary.birthdaysSentCount || 0) + 1;
+            }
             summary.details.push({
               idempotencyKey: candidate.idempotencyKey,
               memberId: candidate.memberId,
               memberName: candidate.memberName,
               phone: candidate.phone,
               daysLeft: candidate.daysLeft,
+              type: candidate.type || 'renewal',
               action: 'sent',
-              reason: `Dispatched successfully (Message ID: ${sendResult.messageId})`
+              reason: isBday
+                ? `Birthday wish dispatched successfully without fail (Message ID: ${sendResult.messageId})`
+                : `Dispatched successfully (Message ID: ${sendResult.messageId})`
             });
           }
         } catch (dispatchErr: any) {
@@ -682,6 +797,7 @@ export class RenewalAutomationService {
             memberName: candidate.memberName,
             phone: candidate.phone,
             daysLeft: candidate.daysLeft,
+            type: candidate.type || 'renewal',
             action: 'failed',
             reason: dispatchErr?.message || 'Dispatch failed'
           });
