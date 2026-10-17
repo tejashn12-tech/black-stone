@@ -9,7 +9,8 @@ import {
   Sparkles,
   Dumbbell,
   Calculator,
-  ChevronDown
+  ChevronDown,
+  Apple
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -17,7 +18,7 @@ interface NavbarProps {
   onOpenTrialModal: () => void;
   onNavigateSection: (sectionId: string) => void;
   currentView: string;
-  onSetView: (view: 'home' | 'exercises' | 'calculators') => void;
+  onSetView: (view: 'home' | 'exercises' | 'calculators' | 'diet-planner') => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -119,6 +120,21 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span>BMI & BMR</span>
           </button>
 
+          {/* AI Diet & Nutrition Planner */}
+          <button
+            onClick={() => {
+              onSetView('diet-planner');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className={`flex items-center gap-1.5 transition ${
+              currentView === 'diet-planner' ? 'text-orange-400 font-black' : 'hover:text-orange-400'
+            }`}
+          >
+            <Apple className="w-3.5 h-3.5" />
+            <span>Diet Planner</span>
+            <span className="text-[9px] bg-orange-400 text-black px-1.5 py-0.2 rounded font-black font-mono">AI</span>
+          </button>
+
           <button
             onClick={() => handleNavClick('trainers')}
             className="hover:text-orange-400 transition"
@@ -211,6 +227,20 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <span>BMI & BMR Fitness Calculators</span>
               <Calculator className="w-4 h-4 text-orange-400" />
+            </button>
+            <button
+              onClick={() => {
+                onSetView('diet-planner');
+                setIsMobileMenuOpen(false);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className="text-left py-2 hover:text-orange-400 transition border-b border-zinc-900 flex items-center justify-between text-orange-400 font-bold"
+            >
+              <div className="flex items-center gap-2">
+                <Apple className="w-4 h-4 text-orange-400" />
+                <span>AI Diet & Nutrition Planner</span>
+              </div>
+              <span className="text-[10px] bg-orange-400 text-black px-2 py-0.5 rounded font-black font-mono">7-DAY</span>
             </button>
             <button
               onClick={() => handleNavClick('trainers')}

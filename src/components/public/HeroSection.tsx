@@ -9,19 +9,22 @@ import {
   Clock,
   Dumbbell,
   CheckCircle2,
-  MapPin
+  MapPin,
+  Apple
 } from 'lucide-react';
 
 interface HeroSectionProps {
   onOpenTrialModal: () => void;
   onExplorePlans: () => void;
   onExploreExercises: () => void;
+  onOpenDietPlanner?: () => void;
 }
 
 export const HeroSection: React.FC<HeroSectionProps> = ({
   onOpenTrialModal,
   onExplorePlans,
-  onExploreExercises
+  onExploreExercises,
+  onOpenDietPlanner
 }) => {
   return (
     <section className="relative min-h-[92vh] flex items-center justify-center pt-24 pb-16 px-4 sm:px-6 lg:px-8 overflow-hidden bg-zinc-950" id="bsf-hero-section">
@@ -89,6 +92,16 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
             <Dumbbell className="w-4 h-4" />
             <span>1,000 Exercises</span>
           </button>
+
+          {onOpenDietPlanner && (
+            <button
+              onClick={onOpenDietPlanner}
+              className="w-full sm:w-auto px-6 py-4 bg-zinc-900/40 hover:bg-zinc-900 text-zinc-400 hover:text-orange-400 border border-zinc-800 rounded-2xl text-xs font-bold uppercase transition flex items-center justify-center gap-1.5"
+            >
+              <Apple className="w-4 h-4 text-orange-400" />
+              <span>AI Diet Planner</span>
+            </button>
+          )}
         </div>
 
         {/* Highlight Metrics Bar */}

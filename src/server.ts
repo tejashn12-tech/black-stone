@@ -57,6 +57,7 @@ process.on('uncaughtException', (err: any) => {
 });
 
 import { whatsappRoutes } from './routes/whatsappRoutes';
+import { dietRoutes } from './routes/dietRoutes';
 import { WhatsAppService } from './whatsapp/WhatsAppService';
 import { RenewalAutomationService } from './whatsapp/automation/RenewalAutomationService';
 import { getWhatsAppEnvironment, getWhatsAppSessionVault } from './whatsapp/environment';
@@ -172,6 +173,9 @@ app.get(['/health', '/api/health'], (_req, res) => {
 
 // WhatsApp API Gateway
 app.use('/api/whatsapp', whatsappRoutes);
+
+// AI Diet Planner and Nutrition Recommendation Gateway
+app.use('/api/diet', dietRoutes);
 
 // Global error handling middleware for API routes
 app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {

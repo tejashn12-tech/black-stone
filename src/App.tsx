@@ -46,6 +46,7 @@ function lazyWithRetry<T extends React.ComponentType<any>>(
 const AdminDashboard = lazyWithRetry(() => import('./components/admin/AdminDashboard').then(m => ({ default: m.AdminDashboard })));
 const ExerciseLibrary = lazyWithRetry(() => import('./components/exercises/ExerciseLibrary').then(m => ({ default: m.ExerciseLibrary })));
 const CalculatorsHub = lazyWithRetry(() => import('./components/calculators/CalculatorsHub').then(m => ({ default: m.CalculatorsHub })));
+const DietPlannerMain = lazyWithRetry(() => import('./components/diet/DietPlannerMain').then(m => ({ default: m.DietPlannerMain })));
 
 const MainAppContent: React.FC = () => {
   const { isAdminAuthenticated } = useGym();
@@ -62,7 +63,15 @@ const MainAppContent: React.FC = () => {
     }
     return 'public';
   });
-  const [publicSubview, setPublicSubview] = useState<'home' | 'exercises' | 'calculators'>('home');
+  const [publicSubview, setPublicSubview] = useState<'home' | 'exercises' | 'calculators' | 'diet-planner'>(() => {
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash.toLowerCase();
+      if (hash.includes('diet')) return 'diet-planner';
+      if (hash.includes('exercises')) return 'exercises';
+      if (hash.includes('calculators')) return 'calculators';
+    }
+    return 'home';
+  });
 
   // Sync hash changes in host/published environments
   React.useEffect(() => {
@@ -70,6 +79,15 @@ const MainAppContent: React.FC = () => {
       const hash = window.location.hash.toLowerCase();
       if (hash.includes('admin')) {
         setMainView('admin');
+      } else if (hash.includes('diet')) {
+        setMainView('public');
+        setPublicSubview('diet-planner');
+      } else if (hash.includes('exercises')) {
+        setMainView('public');
+        setPublicSubview('exercises');
+      } else if (hash.includes('calculators')) {
+        setMainView('public');
+        setPublicSubview('calculators');
       } else if (hash === '#home' || hash === '' || hash === '#public') {
         setMainView('public');
       }
@@ -154,6 +172,10 @@ const MainAppContent: React.FC = () => {
                 setPublicSubview('exercises');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
+              onOpenDietPlanner={() => {
+                setPublicSubview('diet-planner');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
             />
 
             <AboutSection />
@@ -197,6 +219,19 @@ const MainAppContent: React.FC = () => {
               </div>
             }>
               <CalculatorsHub />
+            </Suspense>
+          </div>
+        )}
+
+        {publicSubview === 'diet-planner' && (
+          <div className="pt-24 pb-20 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+            <Suspense fallback={
+              <div className="p-20 flex flex-col items-center justify-center gap-3 text-zinc-400 text-xs font-semibold">
+                <Loader2 className="w-8 h-8 animate-spin text-orange-400" />
+                <span>Synthesizing Nutrition & Diet Blueprint...</span>
+              </div>
+            }>
+              <DietPlannerMain />
             </Suspense>
           </div>
         )}

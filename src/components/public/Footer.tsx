@@ -9,14 +9,15 @@ import {
   Heart,
   Dumbbell,
   Calculator,
-  ArrowUp
+  ArrowUp,
+  Apple
 } from 'lucide-react';
 
 interface FooterProps {
   onOpenAdminLogin: () => void;
   onOpenTrialModal: () => void;
   onNavigateSection: (sectionId: string) => void;
-  onSetView: (view: 'home' | 'exercises' | 'calculators') => void;
+  onSetView: (view: 'home' | 'exercises' | 'calculators' | 'diet-planner') => void;
   onOpenPrivacyNotice?: () => void;
   onOpenTerms?: () => void;
   onOpenDataRights?: () => void;
@@ -168,6 +169,18 @@ export const Footer: React.FC<FooterProps> = ({
                 >
                   <Calculator className="w-3.5 h-3.5" />
                   <span>BMI & BMR Calculators</span>
+                </button>
+              </li>
+              <li>
+                <button
+                  onClick={() => {
+                    onSetView('diet-planner');
+                    scrollToTop();
+                  }}
+                  className="hover:text-orange-400 transition flex items-center gap-1.5 text-zinc-300 font-semibold"
+                >
+                  <Apple className="w-3.5 h-3.5 text-orange-400" />
+                  <span>AI Diet & Nutrition Planner</span>
                 </button>
               </li>
               <li>
