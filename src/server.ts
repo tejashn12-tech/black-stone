@@ -8,7 +8,8 @@ dotenv.config();
 import { createServer as createViteServer } from 'vite';
 
 // Suppress internal libsignal session retry noise (Bad MAC / failed to decrypt)
-// which libsignal prints directly to console.error before Baileys automatically emits sendRetryRequest.
+// which libsignal prints directly to console.error before Baileys automatically emits sendRetryRequest,
+// and route transient network timeouts to warning level.
 const originalConsoleError = console.error;
 console.error = function (...args: any[]) {
   const first = typeof args[0] === 'string' ? args[0] : '';
@@ -18,6 +19,13 @@ console.error = function (...args: any[]) {
     first.includes('Bad MAC')
   ) {
     // Normal Signal ratchet desync retry handled automatically by Baileys sendRetryRequest
+    return;
+  }
+  if (
+    first.includes('[MessageDispatcher]') &&
+    (first.includes('Timed Out') || first.includes('timeout') || first.includes('Network timeout'))
+  ) {
+    console.warn(...args);
     return;
   }
   originalConsoleError.apply(console, args);

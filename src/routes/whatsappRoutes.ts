@@ -1119,9 +1119,11 @@ whatsappRoutes.post('/automations/run', async (req: AuthenticatedRequest, res: R
       membershipId: it.membershipId || it.memberId || it.id,
       memberName: it.memberName || it.fullName || 'Member',
       phone: it.phone,
-      type: it.type || (it.messageType === 'birthday' ? 'birthday' : 'renewal'),
+      type: it.type || (it.messageType === 'birthday' ? 'birthday' : it.messageType === 'festival' ? 'festival' : 'renewal'),
+      festivalId: it.festivalId || it.festival?.id,
+      festivalName: it.festivalName || it.festival?.name,
       daysLeft: it.daysLeft ?? it.days ?? 0,
-      message: it.message || (it.type === 'birthday' ? 'Happy Birthday!' : `Renewal reminder: ${it.daysLeft ?? it.days ?? 7} days remaining.`),
+      message: it.message || (it.type === 'birthday' ? 'Happy Birthday!' : it.type === 'festival' ? 'Happy Festival!' : `Renewal reminder: ${it.daysLeft ?? it.days ?? 7} days remaining.`),
       idempotencyKey: it.idempotencyKey
     }));
 
@@ -1131,15 +1133,18 @@ whatsappRoutes.post('/automations/run', async (req: AuthenticatedRequest, res: R
     for (const item of candidates) {
       const membershipId = item.membershipId || item.memberId;
       const isBday = item.type === 'birthday';
+      const isFestival = item.type === 'festival';
       const idempotencyKey = item.idempotencyKey || (isBday
         ? `${membershipId}:birthday:${new Date().getFullYear()}`
+        : isFestival
+        ? `${membershipId}:festival:${item.festivalId || 'festival'}:${new Date().getFullYear()}`
         : `${membershipId}:renewal:${item.daysLeft}`);
 
       try {
         const result = await whatsappService.sendMessage({
           to: item.phone,
           text: item.message,
-          type: isBday ? 'birthday' : 'expiry_reminder',
+          type: isBday ? 'birthday' : isFestival ? 'festival_greeting' : 'expiry_reminder',
           recipientName: item.memberName,
           memberId: item.memberId,
           idempotencyKey

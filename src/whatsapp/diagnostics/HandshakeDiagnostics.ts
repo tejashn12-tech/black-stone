@@ -171,18 +171,25 @@ export class HandshakeDiagnostics {
       info.statusCode === 401 ||
       info.disconnectReasonCode?.includes('401') ||
       info.errorName === 'LoggedOut';
+    const isQrTimeout =
+      info.errorName === 'QrPairingTimeout' ||
+      info.errorMessage?.toLowerCase()?.includes('qr refs') ||
+      (info.statusCode === 408 && info.errorMessage?.toLowerCase()?.includes('qr'));
+
     const eventType = isRestart
       ? 'CONNECTION_RESTART_REQUIRED'
       : isConflict
       ? 'CONNECTION_CONFLICT_HANDLED'
       : isLoggedOut
       ? 'DEVICE_LOGGED_OUT'
+      : isQrTimeout
+      ? 'QR_PAIRING_TIMEOUT'
       : 'CONNECTION_CLOSED';
 
     this.logEvent(eventType, {
       statusCode: info.statusCode,
       disconnectReasonCode: info.disconnectReasonCode,
-      ...(isRestart || isConflict || isLoggedOut ? {} : { errorName: info.errorName, errorMessage: info.errorMessage }),
+      ...(isRestart || isConflict || isLoggedOut || isQrTimeout ? {} : { errorName: info.errorName, errorMessage: info.errorMessage }),
       isNewLogin: info.isNewLogin,
       isOnline: info.isOnline,
       receivedPendingNotifications: info.receivedPendingNotifications

@@ -757,6 +757,16 @@ export const WhatsAppIntegrationPanel: React.FC = () => {
                     <CheckCircle2 className="w-3 h-3 text-emerald-400 inline" />
                   </span>
                 </div>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 text-zinc-300">
+                    <span className="text-xs">🪔</span>
+                    <span>All Indian Festivals Automation:</span>
+                  </div>
+                  <span className="font-bold text-emerald-400 font-mono flex items-center gap-1">
+                    <span>Active For Everyone Without Fail</span>
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400 inline" />
+                  </span>
+                </div>
               </div>
             </div>
 

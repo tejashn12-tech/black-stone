@@ -25,12 +25,15 @@ import {
   Database,
   CheckCircle2,
   RefreshCw,
-  Loader2
+  Loader2,
+  Send
 } from 'lucide-react';
+import confetti from 'canvas-confetti';
 import { useGym } from '../../context/GymContext';
 import { BSFLogo } from '../common/BSFLogo';
 import { DashboardOverview } from './DashboardOverview';
 import { DeskCommandPalette } from './DeskCommandPalette';
+import { IndianFestivalsWishModal } from './IndianFestivalsWishModal';
 import { getEffectiveMemberStatus } from '../../utils/memberStatus';
 
 // Resilient lazy loader that retries tab module imports if temporary network or rebuild occurs
@@ -123,6 +126,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     payments,
     trainers,
     packages,
+    festivals,
+    sendFestivalWishesToAll,
     dataSubjectRequests,
     whatsAppSession,
     logout,
@@ -134,6 +139,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
   const [syncResultNotice, setSyncResultNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Indian Festivals Automation & Broadcast State
+  const [isFestivalModalOpen, setIsFestivalModalOpen] = useState(false);
+  const [selectedFestivalModalId, setSelectedFestivalModalId] = useState<string | undefined>(undefined);
+  const [isBroadcastingFestival, setIsBroadcastingFestival] = useState(false);
+  const [festivalBroadcastNotice, setFestivalBroadcastNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const handleManualSync = async () => {
     setIsManualSyncing(true);
@@ -253,6 +264,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
   }, [members]);
 
+  // Today's Indian Festivals & Upcoming Indian Festivals
+  const todayFestivals = React.useMemo(() => {
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const targetMMDD = `${mm}-${dd}`;
+    return festivals.filter(f => f.enabled !== false && f.monthDay === targetMMDD);
+  }, [festivals]);
+
+  const upcomingFestivals = React.useMemo(() => {
+    const now = new Date();
+    return festivals
+      .filter(f => f.enabled !== false)
+      .map(f => {
+        const [fM, fD] = (f.monthDay || '01-01').split('-').map(Number);
+        const year = now.getFullYear();
+        let target = new Date(year, fM - 1, fD);
+        if (target.getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
+          target = new Date(year + 1, fM - 1, fD);
+        }
+        const diffMs = target.getTime() - now.getTime();
+        const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        return { ...f, daysUntil: diffDays };
+      })
+      .sort((a, b) => a.daysUntil - b.daysUntil);
+  }, [festivals]);
+
   const expiringCount = members.filter(m => getEffectiveMemberStatus(m) === 'expiring_soon').length;
   const newLeadsCount = enquiries.filter(e => e.status === 'New Lead' || e.status === 'Follow-up Required').length;
   const pendingDSRCount = dataSubjectRequests.filter(d => d.status === 'pending' || d.status === 'in_progress').length;
@@ -297,6 +335,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       icon: MessageSquare,
       badge: todayBirthdays.length > 0
         ? `🎂 ${todayBirthdays.length} Birthday${todayBirthdays.length > 1 ? 's' : ''}`
+        : todayFestivals.length > 0
+        ? `🪔 ${todayFestivals[0].name.split('(')[0].trim()}`
         : whatsAppSession.status === 'connected'
         ? 'Active'
         : whatsAppSession.status === 'connecting'
@@ -304,6 +344,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         : null,
       badgeColor: todayBirthdays.length > 0
         ? 'bg-amber-400 text-black font-black'
+        : todayFestivals.length > 0
+        ? 'bg-gradient-to-r from-amber-400 to-orange-400 text-black font-black'
         : whatsAppSession.status === 'connected'
         ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
         : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
@@ -585,6 +627,136 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
+        {/* Today's Indian Festival Celebration Banner in main#bsf-admin-main-content */}
+        {todayFestivals.length > 0 ? (
+          <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-amber-950/50 via-orange-950/40 to-zinc-900 border border-amber-500/40 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500/30 via-orange-500/20 to-red-500/20 text-amber-300 flex items-center justify-center text-2xl shrink-0 border border-amber-500/40 shadow-inner">
+                🪔
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-black text-amber-300 uppercase tracking-wider font-mono">
+                    TODAY'S INDIAN FESTIVAL: {todayFestivals[0].name}
+                  </span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                    <CheckCircle2 className="w-2.5 h-2.5" />
+                    Auto-Wish Active For Everyone (Without Fail)
+                  </span>
+                </div>
+                <p className="text-xs text-zinc-200 font-medium mt-1">
+                  Festive wish template ready. Automated background delivery active for all <span className="font-bold text-white">{members.filter(m => (m.status as string) !== 'inactive' && (m.whatsapp || m.phone)).length} active members</span>.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                disabled={isBroadcastingFestival}
+                onClick={async () => {
+                  setIsBroadcastingFestival(true);
+                  try {
+                    const res = await sendFestivalWishesToAll(todayFestivals[0].id);
+                    if (res.success) {
+                      confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
+                      setFestivalBroadcastNotice({
+                        type: 'success',
+                        message: `Festive wishes for ${todayFestivals[0].name} dispatched to everyone without fail! (Sent: ${res.sent}, Skipped/Duplicate: ${res.duplicate})`
+                      });
+                      setTimeout(() => setFestivalBroadcastNotice(null), 8000);
+                    } else {
+                      setFestivalBroadcastNotice({
+                        type: 'error',
+                        message: res.error || 'Failed to dispatch festival wishes.'
+                      });
+                    }
+                  } catch (err: any) {
+                    setFestivalBroadcastNotice({
+                      type: 'error',
+                      message: err?.message || 'Error dispatching wishes.'
+                    });
+                  } finally {
+                    setIsBroadcastingFestival(false);
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 active:scale-95 text-black font-extrabold text-xs transition flex items-center gap-2 shadow-lg shadow-amber-500/20 disabled:opacity-50"
+              >
+                {isBroadcastingFestival ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-black" />
+                    <span>Broadcasting to Everyone...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send Wish to Everyone Now</span>
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setSelectedFestivalModalId(todayFestivals[0].id);
+                  setIsFestivalModalOpen(true);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-xs font-bold transition flex items-center gap-1.5"
+              >
+                <span>All Indian Festivals (35+)</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* When today is not an active festival, display the Indian Festivals Auto-Wish Bar */
+          upcomingFestivals.length > 0 && (
+            <div className="mb-6 px-4 py-3 rounded-2xl bg-gradient-to-r from-zinc-900 via-zinc-900/90 to-amber-950/20 border border-zinc-800 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="text-xl">🪔</span>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-white">
+                      All Indian Festivals Wish Automation:
+                    </span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      Active For Everyone Without Fail
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 mt-0.5">
+                    Next upcoming festival: <strong className="text-amber-300">{upcomingFestivals[0].name}</strong> ({upcomingFestivals[0].dateString}) in <span className="font-mono text-zinc-200">{upcomingFestivals[0].daysUntil} days</span>.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setSelectedFestivalModalId(upcomingFestivals[0]?.id);
+                  setIsFestivalModalOpen(true);
+                }}
+                className="self-start sm:self-auto px-3.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition flex items-center gap-1.5"
+              >
+                <span>Manage Indian Festivals &amp; Wishes ({festivals.length})</span>
+              </button>
+            </div>
+          )
+        )}
+
+        {/* Festival Broadcast Feedback Notice */}
+        {festivalBroadcastNotice && (
+          <div className={`mb-6 p-4 rounded-xl text-xs flex items-center justify-between border ${
+            festivalBroadcastNotice.type === 'success'
+              ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+              : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+          }`}>
+            <div className="flex items-center gap-2 font-medium">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{festivalBroadcastNotice.message}</span>
+            </div>
+            <button
+              onClick={() => setFestivalBroadcastNotice(null)}
+              className="text-xs underline hover:no-underline font-semibold ml-3"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* Dynamic Sub-Component based on active tab with Suspense code-splitting */}
         <Suspense fallback={
           <div className="p-16 flex flex-col items-center justify-center gap-3 text-zinc-400 text-xs font-semibold">
@@ -702,6 +874,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isOpen={isCommandPaletteOpen}
         onClose={() => setIsCommandPaletteOpen(false)}
         onNavigateTab={(tab) => setActiveTab(tab as AdminTab)}
+      />
+
+      {/* Indian Festivals Automated Wish Center Modal */}
+      <IndianFestivalsWishModal
+        isOpen={isFestivalModalOpen}
+        onClose={() => setIsFestivalModalOpen(false)}
+        initialSelectedFestivalId={selectedFestivalModalId}
       />
 
     </div>

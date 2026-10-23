@@ -4,7 +4,8 @@ import {
   WhatsAppInvalidRecipientError,
   WhatsAppSendFailedError,
   WhatsAppSendInProgressError,
-  WhatsAppRateLimitError
+  WhatsAppRateLimitError,
+  WhatsAppConnectionTimeoutError
 } from '../errors/WhatsAppErrors';
 import { SendMessageOptions, SendMessageResult } from '../status/types';
 import { MessageStatusTracker, sanitizeWhatsAppError } from './MessageStatusTracker';
@@ -143,9 +144,21 @@ export class MessageDispatcher {
       receiptNo
     });
 
-    // Step 4: Verify socket connection
+    // Step 4: Verify socket connection and WebSocket state
     if (!socket) {
       const notConnErr = new WhatsAppNotConnectedError();
+      await this.statusTracker.recordFailed(trackedMessage.id, notConnErr);
+      if (idempotencyKey) {
+        await this.idempotencyManager.markFailed(idempotencyKey.trim(), notConnErr);
+      }
+      throw notConnErr;
+    }
+
+    const ws = (socket as any)?.ws;
+    if (ws && typeof ws.readyState === 'number' && ws.readyState !== 1) {
+      const notConnErr = new WhatsAppNotConnectedError(
+        'WhatsApp socket is currently reconnecting or offline. Message queued.'
+      );
       await this.statusTracker.recordFailed(trackedMessage.id, notConnErr);
       if (idempotencyKey) {
         await this.idempotencyManager.markFailed(idempotencyKey.trim(), notConnErr);
@@ -208,7 +221,43 @@ export class MessageDispatcher {
         };
       }
 
-      const result = await socket.sendMessage(targetJid, messagePayload);
+      // Robust transmission: Wrap with a timeout race and retry once on transient network timeout
+      let result: any;
+      let lastDispatchErr: any;
+      const MAX_DISPATCH_ATTEMPTS = 2;
+
+      for (let attempt = 1; attempt <= MAX_DISPATCH_ATTEMPTS; attempt++) {
+        try {
+          const sendPromise = socket.sendMessage(targetJid, messagePayload);
+          result = await Promise.race([
+            sendPromise,
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Timed Out')), 15000)
+            )
+          ]);
+          lastDispatchErr = null;
+          break;
+        } catch (sendErr: any) {
+          lastDispatchErr = sendErr;
+          const isTimeout =
+            sendErr?.message?.includes('Timed Out') ||
+            sendErr?.message?.toLowerCase()?.includes('timeout') ||
+            sendErr?.output?.statusCode === 408;
+
+          if (isTimeout && attempt < MAX_DISPATCH_ATTEMPTS) {
+            console.warn(
+              `[MessageDispatcher] WhatsApp message transmission attempt ${attempt} timed out. Retrying transmission once...`
+            );
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+            continue;
+          }
+          break;
+        }
+      }
+
+      if (lastDispatchErr) {
+        throw lastDispatchErr;
+      }
 
       const baileysMessageId = result?.key?.id || `msg-${Date.now()}`;
 
@@ -236,7 +285,17 @@ export class MessageDispatcher {
         transitions: updatedMessage?.transitions || []
       };
     } catch (err: any) {
-      console.error('[MessageDispatcher] Error transmitting WhatsApp message:', err?.message);
+      const isNetworkTimeout =
+        err?.message?.includes('Timed Out') ||
+        err?.message?.toLowerCase()?.includes('timeout') ||
+        err?.output?.statusCode === 408;
+
+      if (isNetworkTimeout) {
+        console.warn('[MessageDispatcher] WhatsApp message transmission timed out (network latency):', err?.message);
+      } else {
+        console.error('[MessageDispatcher] Error transmitting WhatsApp message:', err?.message);
+      }
+
       await this.statusTracker.recordFailed(trackedMessage.id, err);
 
       // Step 8: Finalize idempotency as FAILED (allowing controlled retry)
@@ -245,6 +304,9 @@ export class MessageDispatcher {
       }
 
       const sanitizedMessage = sanitizeWhatsAppError(err);
+      if (isNetworkTimeout) {
+        throw new WhatsAppConnectionTimeoutError(sanitizedMessage);
+      }
       throw new WhatsAppSendFailedError(sanitizedMessage);
     }
   }

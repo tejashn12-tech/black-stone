@@ -238,6 +238,7 @@ interface GymContextType {
     festivals: { festival: FestivalEvent; members: Member[]; message: string }[];
   };
   testWhatsAppAutomation: (params: { testPhone: string; templateType: 'renewal_7d' | 'renewal_3d' | 'renewal_1d' | 'birthday' | 'festival'; memberName?: string; customMessage?: string }) => Promise<{ success: boolean; error?: string }>;
+  sendFestivalWishesToAll: (festivalId: string, customMessage?: string) => Promise<{ success: boolean; total: number; sent: number; duplicate: number; failed: number; festivalName?: string; error?: string }>;
 
   // Financial & Analytics Getters
   getStats: () => {
@@ -2019,6 +2020,17 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     safeLocalStorageRemove(STORAGE_KEYS.WHATSAPP_LOGS);
   };
 
+  const formatTokens = (tmpl: string, mem: Member, festName?: string, daysLeft?: number) => {
+    return tmpl
+      .replace(/{MEMBER_NAME}/gi, mem.fullName)
+      .replace(/{EXPIRY_DATE}/gi, mem.expiryDate)
+      .replace(/{DAYS_LEFT}/gi, String(daysLeft ?? ''))
+      .replace(/{GYM_NAME}/gi, settings.gymName || 'Black Stone Fitness')
+      .replace(/{PACKAGE_NAME}/gi, mem.packageName || 'Membership')
+      .replace(/{UPI_ID}/gi, settings.upiId || 'blackstonefitness@upi')
+      .replace(/{FESTIVAL_NAME}/gi, festName || '');
+  };
+
   const getUpcomingAutomationsSummary = (customDate?: string) => {
     // Current date (or custom preview date)
     const now = customDate ? new Date(customDate) : new Date();
@@ -2033,17 +2045,6 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const renewals1d: { member: Member; daysLeft: number; message: string; phone: string }[] = [];
     const birthdays: { member: Member; message: string; phone: string }[] = [];
     const festivalsSummary: { festival: FestivalEvent; members: Member[]; message: string }[] = [];
-
-    const formatTokens = (tmpl: string, mem: Member, festName?: string, daysLeft?: number) => {
-      return tmpl
-        .replace(/{MEMBER_NAME}/gi, mem.fullName)
-        .replace(/{EXPIRY_DATE}/gi, mem.expiryDate)
-        .replace(/{DAYS_LEFT}/gi, String(daysLeft ?? ''))
-        .replace(/{GYM_NAME}/gi, settings.gymName || 'Black Stone Fitness')
-        .replace(/{PACKAGE_NAME}/gi, mem.packageName || 'Membership')
-        .replace(/{UPI_ID}/gi, settings.upiId || 'blackstonefitness@upi')
-        .replace(/{FESTIVAL_NAME}/gi, festName || '');
-    };
 
     const getDaysUntilExpiry = (expiryDateStr: string): number => {
       try {
@@ -2364,10 +2365,11 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               continue;
             }
 
+            const personalizedMsg = formatTokens(festGroup.message, member, festGroup.festival.name);
             const res = await sendWhatsAppMessage(
               phone,
               member.fullName,
-              festGroup.message,
+              personalizedMsg,
               'announcement',
               { memberId: member.id, idempotencyKey: key }
             );
@@ -2431,6 +2433,83 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: res.error || 'Failed to dispatch test message.' };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Error sending test message.' };
+    }
+  };
+
+  const sendFestivalWishesToAll = async (
+    festivalId: string,
+    customMessage?: string
+  ): Promise<{
+    success: boolean;
+    total: number;
+    sent: number;
+    duplicate: number;
+    failed: number;
+    festivalName?: string;
+    error?: string;
+  }> => {
+    try {
+      const fest = festivals.find(f => f.id === festivalId);
+      if (!fest) {
+        return { success: false, total: 0, sent: 0, duplicate: 0, failed: 0, error: 'Festival not found' };
+      }
+      const currentYear = new Date().getFullYear();
+      const eligible = members.filter(
+        m =>
+          (m.status as string) !== 'inactive' &&
+          m.automationOverrides?.festivalGreetings !== false &&
+          (m.whatsapp || m.phone)
+      );
+
+      let sent = 0;
+      let duplicate = 0;
+      let failed = 0;
+
+      for (const m of eligible) {
+        const phone = m.whatsapp || m.phone;
+        if (!phone) continue;
+        const membershipId = (m as any).membershipId || m.id;
+        const key = `${membershipId}:festival:${fest.id}:${currentYear}`;
+        const rawTmpl = customMessage || fest.messageTemplate;
+        const formatted = rawTmpl
+          .replace(/{MEMBER_NAME}/gi, m.fullName || 'Member')
+          .replace(/{GYM_NAME}/gi, settings.gymName || 'Black Stone Fitness')
+          .replace(/{FESTIVAL_NAME}/gi, fest.name);
+
+        const res = await sendWhatsAppMessage(
+          phone,
+          m.fullName,
+          formatted,
+          'announcement',
+          { memberId: m.id, idempotencyKey: key }
+        );
+
+        if (res.isDuplicate) {
+          duplicate++;
+        } else if (res.success) {
+          sent++;
+        } else {
+          failed++;
+        }
+      }
+
+      return {
+        success: true,
+        total: eligible.length,
+        sent,
+        duplicate,
+        failed,
+        festivalName: fest.name
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        total: 0,
+        sent: 0,
+        duplicate: 0,
+        failed: 0,
+        error: err?.message || 'Failed to dispatch festival wishes'
+      };
     }
   };
 
@@ -2550,6 +2629,7 @@ export const GymProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         runWhatsAppAutomations,
         getUpcomingAutomationsSummary,
         testWhatsAppAutomation,
+        sendFestivalWishesToAll,
         getStats,
         getMemberById,
         getPackageById,

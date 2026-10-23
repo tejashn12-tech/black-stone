@@ -1,12 +1,12 @@
 import { WhatsAppService } from '../WhatsAppService';
 import { getAdminDb, isQuotaExhaustedError } from '../../config/firebase';
 import { IdempotencyManager } from '../idempotency/IdempotencyManager';
-import { GymSettings, Member } from '../../types';
-import { INITIAL_SETTINGS, INITIAL_MEMBERS } from '../../data/initialData';
+import { GymSettings, Member, FestivalEvent } from '../../types';
+import { INITIAL_SETTINGS, INITIAL_MEMBERS, INITIAL_FESTIVALS } from '../../data/initialData';
 import { logger } from '../../utils/logger';
 
 export interface RenewalCandidate {
-  type?: 'renewal' | 'birthday';
+  type?: 'renewal' | 'birthday' | 'festival';
   memberId: string;
   membershipId: string;
   memberName: string;
@@ -14,6 +14,8 @@ export interface RenewalCandidate {
   expiryDate?: string;
   daysLeft?: number;
   dob?: string;
+  festivalId?: string;
+  festivalName?: string;
   idempotencyKey: string;
   messageText: string;
   status: 'active' | 'expiring_soon' | 'expired';
@@ -37,13 +39,17 @@ export interface RenewalRunSummary {
   disconnectedSkippedCount: number;
   birthdaysCount?: number;
   birthdaysSentCount?: number;
+  festivalsCount?: number;
+  festivalsSentCount?: number;
   details: Array<{
     idempotencyKey: string;
     memberId: string;
     memberName: string;
     phone: string;
     daysLeft?: number;
-    type?: 'renewal' | 'birthday';
+    type?: 'renewal' | 'birthday' | 'festival';
+    festivalId?: string;
+    festivalName?: string;
     action: 'sent' | 'duplicate_prevented' | 'in_flight' | 'failed' | 'disconnected_queued' | 'skipped_criteria';
     reason?: string;
   }>;
@@ -311,6 +317,54 @@ export class RenewalAutomationService {
   }
 
   /**
+   * Loads active festival events from Firestore or default initial dataset
+   */
+  private async loadFestivals(): Promise<FestivalEvent[]> {
+    const adminDb = getAdminDb();
+    if (adminDb) {
+      try {
+        const snap = await adminDb.collection('festivals').get();
+        if (!snap.empty) {
+          const list = snap.docs.map((doc: any) => {
+            const data = doc.data();
+            return {
+              ...data,
+              id: data.id || doc.id
+            } as FestivalEvent;
+          });
+          return list;
+        }
+      } catch (err: any) {
+        if (!isQuotaExhaustedError(err)) {
+          logger.warn({ reason: err?.message }, '[RenewalAutomation] Notice reading festivals collection, using fallback');
+        }
+      }
+    }
+    return INITIAL_FESTIVALS;
+  }
+
+  /**
+   * Formats the personalized festival greeting message template for any Indian festival
+   */
+  public formatFestivalMessage(
+    template: string | undefined | null,
+    member: Member,
+    festival: FestivalEvent,
+    settings: GymSettings
+  ): string {
+    const gymName = settings.gymName || 'Black Stone Fitness';
+    const fallbackTemplate =
+      festival.messageTemplate ||
+      '🎉 Happy {FESTIVAL_NAME}, {MEMBER_NAME}! Wishing you supreme joy, peak fitness, and vibrant health! 🌟 — Team {GYM_NAME}';
+    const chosenTemplate = template && template.trim() ? template : fallbackTemplate;
+
+    return chosenTemplate
+      .replace(/{MEMBER_NAME}/gi, member.fullName || 'Member')
+      .replace(/{GYM_NAME}/gi, gymName)
+      .replace(/{FESTIVAL_NAME}/gi, festival.name);
+  }
+
+  /**
    * Evaluates if a member's date of birth matches the current calendar month and day
    * in Asia/Kolkata timezone. Handles YYYY-MM-DD, DD-MM-YYYY, YYYY/MM/DD formats.
    */
@@ -404,11 +458,67 @@ export class RenewalAutomationService {
   }> {
     const settings = await this.loadSettings();
     const members = await this.loadMembers();
+    const festivals = await this.loadFestivals();
     const referenceDate = customDateStr ? new Date(customDateStr) : new Date();
     const kolkataToday = this.getTodayInKolkata(referenceDate);
+    const todayMMDD = `${String(kolkataToday.month).padStart(2, '0')}-${String(kolkataToday.day).padStart(2, '0')}`;
 
     const candidates: RenewalCandidate[] = [];
     let activeMembersCount = 0;
+
+    // -------------------------------------------------------------
+    // 1. DAILY INDIAN FESTIVALS CHECK (Evaluated daily for all Indian festivals to everyone without fail)
+    // -------------------------------------------------------------
+    const activeTodayFestivals = festivals.filter(f => f.enabled !== false && f.monthDay === todayMMDD);
+    for (const fest of activeTodayFestivals) {
+      for (const member of members) {
+        const statusLower = (member.status || '').toLowerCase();
+        if (statusLower === 'inactive') continue;
+        const phone = member.whatsapp || member.phone;
+        if (!phone || !this.isValidPhoneNumber(phone)) continue;
+
+        // Active by default unless member specifically opted out of festival greetings
+        if (member.automationOverrides?.festivalGreetings === false) continue;
+
+        const membershipId = member.packageId || member.memberCode || member.id;
+        const festIdempotencyKey = `${member.id}:festival:${fest.id}:${kolkataToday.year}`;
+        const existingRecord = await this.idempotencyManager.getRecord(festIdempotencyKey);
+        let deliveryState: 'SUCCESS' | 'PENDING' | 'IN_FLIGHT' | 'UNPROCESSED' = 'UNPROCESSED';
+        let deliveredAt: string | null = null;
+
+        if (existingRecord) {
+          if (existingRecord.status === 'SUCCESS') {
+            deliveryState = 'SUCCESS';
+            deliveredAt = existingRecord.completedAt || existingRecord.updatedAt;
+          } else if (existingRecord.status === 'PENDING') {
+            const now = Date.now();
+            if (existingRecord.lockedUntil && existingRecord.lockedUntil > now) {
+              deliveryState = 'IN_FLIGHT';
+            } else {
+              deliveryState = 'PENDING';
+            }
+          }
+        }
+
+        const festMessage = this.formatFestivalMessage(fest.messageTemplate, member, fest, settings);
+
+        candidates.push({
+          type: 'festival',
+          memberId: member.id,
+          membershipId,
+          memberName: member.fullName,
+          phone,
+          festivalId: fest.id,
+          festivalName: fest.name,
+          daysLeft: 0,
+          idempotencyKey: festIdempotencyKey,
+          messageText: festMessage,
+          status: (statusLower === 'active' || statusLower === 'expiring_soon') ? statusLower : 'expired',
+          deliveryState,
+          deliveredAt
+        });
+      }
+    }
 
     for (const member of members) {
       const statusLower = (member.status || '').toLowerCase();
@@ -416,7 +526,7 @@ export class RenewalAutomationService {
       const membershipId = member.packageId || member.memberCode || member.id;
 
       // -------------------------------------------------------------
-      // 1. DAILY BIRTHDAY CHECK (Evaluated daily without fail)
+      // 2. DAILY BIRTHDAY CHECK (Evaluated daily without fail)
       // -------------------------------------------------------------
       const rawDob = member.dob || (member as any).dateOfBirth || (member as any).birthDate;
       const isBdayToday = this.isBirthdayToday(rawDob, kolkataToday.month, kolkataToday.day);
@@ -463,7 +573,7 @@ export class RenewalAutomationService {
       }
 
       // -------------------------------------------------------------
-      // 2. MEMBERSHIP EXPIRY / RENEWAL CHECK
+      // 3. MEMBERSHIP EXPIRY / RENEWAL CHECK
       // -------------------------------------------------------------
       // 1. Membership must be active
       const isActive = statusLower === 'active' || statusLower === 'expiring_soon';
@@ -682,6 +792,8 @@ export class RenewalAutomationService {
       summary.totalMembersChecked = totalMembers;
       summary.activeMembersCount = activeMembers;
       summary.totalCandidates = candidates.length;
+      summary.birthdaysCount = candidates.filter(c => c.type === 'birthday').length;
+      summary.festivalsCount = candidates.filter(c => c.type === 'festival').length;
 
       if (options?.dryRun) {
         for (const c of candidates) {
@@ -692,6 +804,8 @@ export class RenewalAutomationService {
             phone: c.phone,
             daysLeft: c.daysLeft,
             type: c.type || 'renewal',
+            festivalId: c.festivalId,
+            festivalName: c.festivalName,
             action: 'skipped_criteria',
             reason: 'Dry-run preview mode'
           });
@@ -712,6 +826,8 @@ export class RenewalAutomationService {
             phone: candidate.phone,
             daysLeft: candidate.daysLeft,
             type: candidate.type || 'renewal',
+            festivalId: candidate.festivalId,
+            festivalName: candidate.festivalName,
             action: 'duplicate_prevented',
             reason: `Already delivered successfully on ${candidate.deliveredAt || 'today'} (idempotency preserved)`
           });
@@ -730,6 +846,8 @@ export class RenewalAutomationService {
             phone: candidate.phone,
             daysLeft: candidate.daysLeft,
             type: candidate.type || 'renewal',
+            festivalId: candidate.festivalId,
+            festivalName: candidate.festivalName,
             action: 'disconnected_queued',
             reason: 'WhatsApp socket is currently disconnected; queued for retry upon connection restoration'
           });
@@ -748,10 +866,11 @@ export class RenewalAutomationService {
 
         try {
           const isBday = candidate.type === 'birthday';
+          const isFest = candidate.type === 'festival';
           const sendResult = await this.whatsappService.sendMessage({
             to: candidate.phone,
             text: candidate.messageText,
-            type: isBday ? 'birthday' : 'expiry_reminder',
+            type: isBday ? 'birthday' : isFest ? 'festival_greeting' : 'expiry_reminder',
             recipientName: candidate.memberName,
             memberId: candidate.memberId,
             idempotencyKey: candidate.idempotencyKey
@@ -766,15 +885,22 @@ export class RenewalAutomationService {
               phone: candidate.phone,
               daysLeft: candidate.daysLeft,
               type: candidate.type || 'renewal',
+              festivalId: candidate.festivalId,
+              festivalName: candidate.festivalName,
               action: 'duplicate_prevented',
               reason: isBday
                 ? 'Birthday wish already sent for this calendar year (idempotency enforced)'
+                : isFest
+                ? `Festival wish for "${candidate.festivalName || 'Festival'}" already sent for this calendar year (idempotency enforced)`
                 : 'Already sent successfully in a previous dispatch (idempotency enforced)'
             });
           } else {
             summary.sentCount++;
             if (isBday) {
               summary.birthdaysSentCount = (summary.birthdaysSentCount || 0) + 1;
+            }
+            if (isFest) {
+              summary.festivalsSentCount = (summary.festivalsSentCount || 0) + 1;
             }
             summary.details.push({
               idempotencyKey: candidate.idempotencyKey,
@@ -783,9 +909,13 @@ export class RenewalAutomationService {
               phone: candidate.phone,
               daysLeft: candidate.daysLeft,
               type: candidate.type || 'renewal',
+              festivalId: candidate.festivalId,
+              festivalName: candidate.festivalName,
               action: 'sent',
               reason: isBday
                 ? `Birthday wish dispatched successfully without fail (Message ID: ${sendResult.messageId})`
+                : isFest
+                ? `Festival wish for "${candidate.festivalName || 'Festival'}" dispatched successfully without fail (Message ID: ${sendResult.messageId})`
                 : `Dispatched successfully (Message ID: ${sendResult.messageId})`
             });
           }
@@ -798,6 +928,8 @@ export class RenewalAutomationService {
             phone: candidate.phone,
             daysLeft: candidate.daysLeft,
             type: candidate.type || 'renewal',
+            festivalId: candidate.festivalId,
+            festivalName: candidate.festivalName,
             action: 'failed',
             reason: dispatchErr?.message || 'Dispatch failed'
           });

@@ -191,6 +191,25 @@ export function classifyDisconnect(
     };
   }
 
+  // Case 7: QR Code Pairing Timeout / Attempts Ended
+  // Baileys emits statusCode 408 with message "QR refs attempts ended" when QR is not scanned within allowed window
+  const isQrExpired =
+    errorMsg.toLowerCase().includes('qr refs attempts') ||
+    errorMsg.toLowerCase().includes('qr timeout') ||
+    (statusCode === 408 && errorMsg.toLowerCase().includes('qr'));
+
+  if (isQrExpired) {
+    return {
+      category: DisconnectCategory.MANUAL_DISCONNECT,
+      statusCode: 408,
+      errorName: 'QrPairingTimeout',
+      errorMessage: '', // Routine pairing window expiration, not an error
+      shouldReconnect: false,
+      clearAuth: false,
+      humanReason: 'QR code pairing window timed out. Scan QR code to connect.'
+    };
+  }
+
   // Case 1: Temporary network disconnection (408 timedOut, connectionLost, 428 connectionClosed, socket hung up, etc.)
   return {
     category: DisconnectCategory.TEMPORARY_NETWORK,

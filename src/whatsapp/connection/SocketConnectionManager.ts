@@ -118,7 +118,9 @@ export class SocketConnectionManager {
   }
 
   public isConnected(): boolean {
-    return this.statusManager.isConnected() && this.socket !== null;
+    const ws = (this.socket as any)?.ws;
+    const isWsOpen = !ws || ws.readyState === 1;
+    return this.statusManager.isConnected() && this.socket !== null && isWsOpen;
   }
 
   /**
@@ -237,8 +239,8 @@ export class SocketConnectionManager {
         logger: baileysLogger,
         printQRInTerminal: false,
         browser: ['Blackstone Fitness Mysuru', 'Chrome', '1.0.0'],
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000,
+        connectTimeoutMs: 30000,
+        defaultQueryTimeoutMs: 25000,
         keepAliveIntervalMs: 25000,
         markOnlineOnConnect: true,
         syncFullHistory: false,
@@ -456,15 +458,22 @@ export class SocketConnectionManager {
         statusCode === 401 ||
         analysis.category === DisconnectCategory.EXPLICIT_LOGOUT ||
         analysis.category === DisconnectCategory.AUTHENTICATION_FAILURE;
+      const isQrTimeout =
+        analysis.errorName === 'QrPairingTimeout' ||
+        analysis.humanReason.includes('QR code pairing window') ||
+        (err?.message && String(err.message).toLowerCase().includes('qr refs'));
+
       const errorName = is515
         ? 'RestartRequired'
         : isConflict
         ? 'StreamConflict'
         : isLoggedOut
         ? 'LoggedOut'
+        : isQrTimeout
+        ? 'QrPairingTimeout'
         : (err?.name || (err?.constructor ? err.constructor.name : 'UnknownError'));
-      const errorMessage = is515 || isConflict || isLoggedOut ? '' : (analysis.errorMessage || err?.message || 'Connection closed unexpectedly');
-      const sanitizedStack = is515 || isConflict || isLoggedOut ? null : (err?.stack ? err.stack.split('\n').slice(0, 5).join('\n') : null);
+      const errorMessage = is515 || isConflict || isLoggedOut || isQrTimeout ? '' : (analysis.errorMessage || err?.message || 'Connection closed unexpectedly');
+      const sanitizedStack = is515 || isConflict || isLoggedOut || isQrTimeout ? null : (err?.stack ? err.stack.split('\n').slice(0, 5).join('\n') : null);
       const reasonCodeName = getDisconnectReasonName(statusCode);
 
       HandshakeDiagnostics.getInstance().recordConnectionClosed({
@@ -494,6 +503,7 @@ export class SocketConnectionManager {
       if (
         analysis.errorMessage &&
         !analysis.isImmediateRestart &&
+        !isQrTimeout &&
         analysis.category !== DisconnectCategory.MANUAL_DISCONNECT &&
         analysis.category !== DisconnectCategory.SERVER_RESTART &&
         analysis.category !== DisconnectCategory.EXPLICIT_LOGOUT &&
@@ -503,7 +513,13 @@ export class SocketConnectionManager {
         closeLogPayload.error = analysis.errorMessage;
       }
 
-      if (!isLoggedOut) {
+      if (isQrTimeout) {
+        logWhatsAppEvent(WhatsAppLogEvent.CONNECTION_CLOSED, {
+          category: 'PAIRING_TIMEOUT',
+          reason: analysis.humanReason || 'QR code pairing window timed out.',
+          statusCode: 408
+        });
+      } else if (!isLoggedOut) {
         logWhatsAppEvent(WhatsAppLogEvent.CONNECTION_CLOSED, closeLogPayload);
       }
 
@@ -538,14 +554,17 @@ export class SocketConnectionManager {
         return;
       }
 
-      // Case: Manual pause by administrator
-      if (analysis.category === DisconnectCategory.MANUAL_DISCONNECT || this.isManualDisconnect) {
+      // Case: Manual pause by administrator or QR pairing timeout
+      if (analysis.category === DisconnectCategory.MANUAL_DISCONNECT || this.isManualDisconnect || isQrTimeout) {
         this.destroyCurrentSocket();
         this.reconnectAttempts = 0;
         this.isReconnecting = false;
         this.clearReconnectTimer();
+        this.qrManager.clear();
         this.statusManager.transition('DISCONNECTED', analysis.humanReason, {
-          lastError: null
+          lastError: null,
+          hasQr: false,
+          qrExpiresAt: null
         });
         return;
       }
